@@ -1,4 +1,5 @@
 from agents.orchestrator import app
+from rag.embedder import embeder
 
 
 if __name__ == "__main__":
@@ -13,6 +14,7 @@ if __name__ == "__main__":
     "review_metadata":[],
     "test_metadata":[],
     "summary_metadata":""
-}
+     }
+    embeder(repo_name)
     result=app.invoke(initial_state)
     print(result["summary_metadata"])

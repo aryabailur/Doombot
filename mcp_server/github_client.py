@@ -39,25 +39,31 @@ def get_file_content(repo_name,file_path):
     g=Github(github_token)
     repo=g.get_repo(repo_name)
     file=repo.get_contents(file_path)
-    return file.decoded_content.decode("utf-8")
+    try:
+        return file.decoded_content.decode("utf-8")
+    except UnicodeDecodeError:
+        return ""
 
 def post_review_comment(repo_name,pr_number,comment):
     pr=git_initialization(repo_name,pr_number)
     comment=pr.create_issue_comment(comment)
     return comment.body
 
-def get_repo_files(repo_name,):
-    g=Github(github_token)
-    repo=g.get_repo(repo_name)
-    content=repo.get_contents("")
-    files=[]
+SKIP_EXTENSIONS = ['.png', '.jpg', '.gif', '.svg', '.ico', '.pdf', '.zip', '.node']
+SKIP_DIRS = ['node_modules', '.git', 'venv', '__pycache__', 'dist', 'build']
+
+def get_repo_files(repo_name):
+    g = Github(github_token)
+    repo = g.get_repo(repo_name)
+    content = list(repo.get_contents(""))
+    files = []
     while content:
-        file=content.pop(0)
-        if file.type=="dir":
-            content.extend(
-                repo.get_contents(file.path)
-            )
+        file = content.pop(0)
+        if any(skip in file.path for skip in SKIP_DIRS):
+            continue
+        if file.type == "dir":
+            content.extend(repo.get_contents(file.path))
         else:
-            files.append(file.path)
+            if not any(file.path.endswith(ext) for ext in SKIP_EXTENSIONS):
+                files.append(file.path)
     return files
-             

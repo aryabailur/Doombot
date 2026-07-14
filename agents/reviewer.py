@@ -5,6 +5,7 @@ from mcp.client.stdio import stdio_client
 from langgraph.prebuilt import create_react_agent
 from agents.state import GraphState
 from dotenv import load_dotenv
+from rag.retriever import retrieve
 load_dotenv()
 from langchain_groq import ChatGroq
 llm = ChatGroq(model="llama-3.3-70b-versatile")
@@ -39,15 +40,17 @@ def get_full_file(repo_name:str,file_path:str)->str:
     return asyncio.run(call_tool())
 
         
-@tool
-def retrieve_similar_code(query: str) -> str:
-    """Retrieves similar code chunks from the codebase using vector similarity search"""
-    # TODO: implement ChromaDB retrieval
-    return "RAG not implemented yet"
 
-tool_list=[get_full_file,retrieve_similar_code]
+def reviewer_node(state:GraphState):
+   @tool
+   def retrieve_similar_code(query: str) -> str:
+       """Retrieves similar code chunks from the codebase using vector similarity search"""
+       repo_name=state["repo_name"]
+       result=retrieve(query,repo_name)
+       return str([doc.page_content for doc in result])
+   tool_list=[get_full_file,retrieve_similar_code]
 
-reviewer_agent=create_react_agent(
+   reviewer_agent=create_react_agent(
    model=llm,
    tools=tool_list,
    prompt="""You are an expert code reviewer. You will be given a list of file changes from a Pull Request.
@@ -67,8 +70,9 @@ retrieve_similar_code — use this when you need to understand patterns in the c
 
 Stop when you have reviewed all changed files and have no more findings to report."""
 )
+       
 
-def reviewer_node(state:GraphState):
+
    dif_files=state["diff_files"]
    result=reviewer_agent.invoke(
       {
@@ -82,3 +86,4 @@ def reviewer_node(state:GraphState):
       }
    )
    return {"review_metadata":[result["messages"][-1].content]}
+   
