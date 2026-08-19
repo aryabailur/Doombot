@@ -2,8 +2,6 @@
 
 React + Vite + TypeScript + Tailwind + shadcn/ui. The primary product surface (F13).
 
-**Not yet scaffolded.** See [CLAUDE.md](CLAUDE.md) §3 for the exact commands.
-
 ## Read before working here
 
 | File | What |
