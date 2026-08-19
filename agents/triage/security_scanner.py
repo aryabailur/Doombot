@@ -4,13 +4,24 @@ Node: security_scanner
 Reads:  issue_metadata
 Writes: security_findings
 
-Layer 1 (MUST-HAVE, implemented here): deterministic, case-insensitive
-keyword match over `issue_metadata["title"] + " " + issue_metadata["body"]`.
-Layer 2 (CUT for now): an LLM pass to confirm each Layer-1 hit is a genuine
-concern rather than an incidental mention (e.g. "auth" in "help configuring
-auth for my fork"). Not built here -- see agents/CLAUDE.md §4.3.
+Layer 1: deterministic, case-insensitive keyword match over
+`issue_metadata["title"] + " " + issue_metadata["body"]`.
+
+Layer 2: an LLM pass that narrows Layer 1's hits to the ones describing a
+genuine concern. Originally scoped as optional, but a live run made it
+necessary: a plain bug report saying "authentication stopped working after
+an upgrade" was escalated as a security issue, because keyword matching
+cannot distinguish a broken feature from a vulnerability. Escalating every
+bug that says "auth" is precisely the noise selective escalation exists to
+prevent.
+
+Layer 2 only narrows, never adds, and passes findings through unchanged if
+the LLM is unavailable -- an outage must not silently disable security
+detection.
 """
 
+import json
+import os
 import re
 
 from agents.chain import chain_step
@@ -86,6 +97,67 @@ def _context(text: str, start: int, end: int) -> str:
     return snippet
 
 
+_CONFIRM_PROMPT = """You are triaging a GitHub issue for security relevance.
+
+A keyword scan flagged these terms. For EACH, decide whether the issue
+actually describes a security concern (a vulnerability, an exploit, or a
+leaked credential) or merely mentions the word while describing an ordinary
+bug or feature request.
+
+"authentication stopped working after an upgrade" is a BUG, not a security
+concern. "authentication can be bypassed with a crafted header" IS one.
+A traceback that prints a real API key IS one.
+
+Issue title: {title}
+
+Issue body:
+{body}
+
+Flagged terms: {keywords}
+
+Respond with ONLY a JSON object, no prose, no code fence:
+{{"confirmed": ["term", ...], "reason": "one short sentence"}}
+
+confirmed lists only the terms that reflect a genuine security concern. An
+empty list is correct and expected for ordinary bugs."""
+
+
+def _get_llm():
+    """Lazily construct the Groq chat model.
+
+    Lazy so importing this module for a keyword-only unit test does not
+    require GROQ_API_KEY.
+    """
+    from langchain_groq import ChatGroq
+
+    return ChatGroq(model=os.getenv("GROQ_MODEL", "openai/gpt-oss-120b"))
+
+
+def _confirm(title: str, body: str, findings: list[dict]) -> tuple[list[dict], str]:
+    """Layer 2: ask the LLM which keyword hits are genuine security concerns.
+
+    Narrows Layer 1's findings; never adds to them. On any failure the
+    findings pass through unchanged -- a Groq outage must not silently
+    disable security detection, and over-reporting is the safe direction.
+    """
+    keywords = [f["keyword"] for f in findings]
+    prompt = _CONFIRM_PROMPT.format(
+        title=title, body=(body or "(no body)")[:3000], keywords=", ".join(keywords)
+    )
+    try:
+        raw = getattr(_get_llm().invoke(prompt), "content", "") or ""
+        match = re.search(r"\{.*\}", raw, re.DOTALL)
+        if not match:
+            return findings, "LLM response unparseable; keeping keyword hits"
+        data = json.loads(match.group(0))
+        confirmed = {str(k).lower() for k in data.get("confirmed", [])}
+        reason = str(data.get("reason", ""))[:200]
+    except Exception as exc:
+        return findings, f"LLM unavailable ({exc}); keeping keyword hits"
+
+    return [f for f in findings if f["keyword"].lower() in confirmed], reason
+
+
 @chain_step("security_scanner", "Scanning for security concerns")
 def security_scanner_node(state: GraphState) -> tuple[dict, list[dict]]:
     """Layer 1: deterministic keyword scan of the issue title + body.
@@ -115,5 +187,22 @@ def security_scanner_node(state: GraphState) -> tuple[dict, list[dict]]:
         {"type": "rule", "ref": kw, "score": None, "snippet": ctx}
         for kw, ctx in seen.items()
     ]
+
+    # Layer 2 only runs when Layer 1 found something -- no hits, no LLM call,
+    # so the common case stays free and instant.
+    if findings:
+        confirmed, reason = _confirm(title, body, findings)
+        dropped = [f["keyword"] for f in findings if f not in confirmed]
+        evidence.append({
+            "type": "rule",
+            "ref": "llm_confirmation",
+            "score": None,
+            "snippet": (
+                f"confirmed {[f['keyword'] for f in confirmed] or 'none'}"
+                + (f", dismissed {dropped} as incidental" if dropped else "")
+                + f" -- {reason}"
+            ),
+        })
+        findings = confirmed
 
     return {"security_findings": findings}, evidence
