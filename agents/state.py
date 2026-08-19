@@ -32,5 +32,7 @@ class GraphState(TypedDict, total=False):
     security_findings: list[dict]  # [{"keyword": str, "context": str}]
     impact_score: int              # 0-100, from impact_scorer
     labels: list[str]              # labels chosen by labeler
+    labels_confidence: float       # labeler's certainty, 0.0-1.0
+    labels_suggested: bool         # True => below threshold, decider must not auto-apply
     decision: dict                 # {"action": ..., "reason": ..., "confidence": float}
     chain: Annotated[list[dict], add]  # StepRecord log; every node appends exactly one
