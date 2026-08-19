@@ -236,4 +236,5 @@ read the reason first.
 | Any frontend work | `dashboard/CLAUDE.md`, then your `FRONTEND-*.md` |
 | The extension | `vscode-extension/CLAUDE.md` |
 | Design, tokens, screens, safety | `docs/DESIGN.md` |
+| Type scale, z-index, motion, severity | `docs/DESIGN-ADDENDUM.md` |
 | Who builds what, in what order | `docs/FEATURES.md`, `docs/WORKFLOW.md` |

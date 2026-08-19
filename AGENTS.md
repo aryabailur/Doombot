@@ -19,8 +19,9 @@ none), this file points at it and adds Codex-specific procedure.
 
 1. `CLAUDE.md` — the rules
 2. `docs/DESIGN.md` — the design and scope source of truth
-3. The `CLAUDE.md` of the folder you are about to edit
-4. Nothing else, until you have finished the task
+3. `docs/DESIGN-ADDENDUM.md` — if you are touching UI (numbers `DESIGN.md` omits)
+4. The `CLAUDE.md` of the folder you are about to edit
+5. Nothing else, until you have finished the task
 
 ---
 

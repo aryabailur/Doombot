@@ -8,6 +8,16 @@ This file is scoped to `dashboard/`. It does not override root `CLAUDE.md` —
 git workflow, non-negotiable rules, and workstream ownership boundaries are
 defined there (root §2, §5, §6) and only referenced here.
 
+**Also required reading: [`../docs/DESIGN-ADDENDUM.md`](../docs/DESIGN-ADDENDUM.md).**
+`DESIGN.md` defines the tokens and principles; the addendum defines the numbers it
+omits — type scale, z-index ladder, motion durations, elevation, severity ordering,
+focus rings, keyboard bindings, and microcopy rules. It also documents a **verified
+contrast audit** and a **real defect in the severity palette** (`--high` is brighter
+than `--critical`, so on a dark UI the hierarchy inverts unless you encode severity
+with fill, rule weight, and icon as well as hue). Do not invent any of those values
+yourself — four people each inventing them is how one product starts looking
+like four.
+
 ---
 
 ## 1. Purpose

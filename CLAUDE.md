@@ -278,6 +278,8 @@ Read the root file, then only the folder you are working in.
 ```
 CLAUDE.md                       this file — read first, always
 AGENTS.md                       Codex entry point (points here)
+docs/DESIGN.md                  design & scope source of truth (features, screens, safety)
+docs/DESIGN-ADDENDUM.md         implementation specifics: type scale, z-index, motion, severity
 docs/ARCHITECTURE.md            system design and data flow
 docs/WORKFLOW.md                git, PR, and integration protocol in depth
 docs/FEATURES.md                feature list mapped to owners and branches

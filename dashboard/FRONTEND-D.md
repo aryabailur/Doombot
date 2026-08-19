@@ -1,7 +1,14 @@
 # Person D — Frontend Shell + Overview + VS Code
 
-**Read `dashboard/CLAUDE.md` first.** This file assumes you already know the
-tokens, the twelve states, the icon map, and the conventions.
+**Read `dashboard/CLAUDE.md` first**, then
+[`../docs/DESIGN-ADDENDUM.md`](../docs/DESIGN-ADDENDUM.md). This file assumes you
+already know the tokens, the twelve states, the icon map, and the conventions.
+
+**Addendum §2 is mandatory for `SeverityBadge` and `EscalationTable`** — the
+severity palette inverts visually on dark backgrounds (`--high` is brighter than
+`--critical`), so severity must be encoded with fill, rule thickness, icon, and the
+severity word, not hue alone. Addendum §10 specifies the three shared state
+primitives you own, and §11 the escalation-queue keyboard bindings.
 
 You own the app chrome, the overview screen, the escalation queue, and
 project health. You also own `vscode-extension/` — see

@@ -64,6 +64,7 @@ Read in this order. **Agents: `CLAUDE.md` first, always.**
 | [CLAUDE.md](CLAUDE.md) | **Agent operating manual — rules, ownership, git workflow** |
 | [AGENTS.md](AGENTS.md) | Codex entry point |
 | [docs/DESIGN.md](docs/DESIGN.md) | Design and scope source of truth — features, tokens, screens, safety |
+| [docs/DESIGN-ADDENDUM.md](docs/DESIGN-ADDENDUM.md) | Implementation specifics — type scale, z-index, motion, severity, microcopy |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System design and why it's built this way |
 | [docs/WORKFLOW.md](docs/WORKFLOW.md) | Git, PRs, integration gates |
 | [docs/FEATURES.md](docs/FEATURES.md) | Feature → owner → branch mapping, cut list |

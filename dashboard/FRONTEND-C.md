@@ -1,8 +1,14 @@
 # Person C — Frontend Core
 
-**Read `dashboard/CLAUDE.md` first.** This file assumes you already know the
-tokens, the twelve states, the icon map, and the conventions — it does not
-repeat them.
+**Read `dashboard/CLAUDE.md` first**, then
+[`../docs/DESIGN-ADDENDUM.md`](../docs/DESIGN-ADDENDUM.md). This file assumes you
+already know the tokens, the twelve states, the icon map, and the conventions — it
+does not repeat them.
+
+**Addendum §8 is the visual spec for your hero component** — trace rail, step
+markers per status, duration formatting, the opacity+translateY reveal, the
+auto-scroll rule, and the `aria-live` requirement. Build `InvestigationTrace`
+against it. Addendum §9 governs how you render confidence.
 
 You own the investigation and evidence surfaces. This is the hero of the
 demo: DESIGN.md §5 says the visual design must always make three questions
