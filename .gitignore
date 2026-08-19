@@ -3,3 +3,16 @@ __pycache__/
 *.pyo
 .env
 venv/
+.venv/
+
+# Local data stores
+chroma_db/
+*.db
+*.db-wal
+*.db-shm
+
+# Frontend
+node_modules/
+dist/
+.vite/
+*.vsix

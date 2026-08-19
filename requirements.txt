@@ -1,0 +1,18 @@
+# torch is installed separately, CPU-only, to avoid a ~2.4GB download:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+langgraph>=1.2.9
+langchain-core>=1.4
+langchain-groq
+langchain-chroma
+langchain-huggingface
+langchain-text-splitters
+langchain-community
+sentence-transformers
+chromadb
+PyGithub
+mcp>=1.28
+fastapi
+uvicorn[standard]
+python-dotenv
+pydantic
