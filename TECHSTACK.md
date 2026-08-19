@@ -24,7 +24,14 @@ across both frontend surfaces means any of the four of us can work on either.
 
 ## AI and ML
 
-**Groq (`langchain-groq`)** — `llama-3.3-70b-versatile` for every LLM call:
+**Groq (`langchain-groq`)** — `openai/gpt-oss-120b` for every LLM call:
+
+> The model id starts with `openai/` because it is OpenAI's **open-weights**
+> release, served on Groq's hardware. It is not the OpenAI API: no
+> `OPENAI_API_KEY`, no OpenAI account, no per-token bill. The only credential is
+> `GROQ_API_KEY`. Groq retired `llama-3.3-70b-versatile`, which is why the
+> earlier docs named a model that no longer exists.
+
 classification, severity assessment, recommendations, PR review, summaries. Chosen
 over OpenAI for three reasons that matter at a hackathon: it's free, it's
 dramatically faster per token, and it needs no billing setup. Model is read from
@@ -111,7 +118,7 @@ escalation tree view, and a webview onto the dashboard. P2 stretch scope.
 ```bash
 GITHUB_TOKEN=ghp_...                     # repo scope
 GROQ_API_KEY=gsk_...
-GROQ_MODEL=llama-3.3-70b-versatile
+GROQ_MODEL=openai/gpt-oss-120b
 
 DB_PATH=./doombot.db
 CHROMA_DIR=./chroma_db

@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from rag.retriever import retrieve
 load_dotenv()
 from langchain_groq import ChatGroq
-llm = ChatGroq(model="llama-3.3-70b-versatile")
+llm = ChatGroq(model="openai/gpt-oss-120b")
 
 @tool
 def get_full_file(repo_name:str,file_path:str)->str:

@@ -3,7 +3,7 @@ from agents.state import GraphState
 from langchain_core.messages import (SystemMessage,HumanMessage)
 from dotenv import load_dotenv
 load_dotenv()
-llm = ChatGroq(model="llama-3.3-70b-versatile")
+llm = ChatGroq(model="openai/gpt-oss-120b")
 
 def test_writer_node(state:GraphState):
     review_metadata=state["review_metadata"]

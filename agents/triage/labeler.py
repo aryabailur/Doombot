@@ -64,7 +64,7 @@ def _get_llm():
     """
     from langchain_groq import ChatGroq
 
-    return ChatGroq(model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"))
+    return ChatGroq(model=os.getenv("GROQ_MODEL", "openai/gpt-oss-120b"))
 
 
 def _parse_response(text: str) -> dict:
