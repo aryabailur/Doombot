@@ -8,6 +8,7 @@ from mcp_server.github_client import (
     get_issues,
     post_issue_comment,
     add_labels,
+    get_issue_comments,
 )
 import json
 
@@ -61,3 +62,9 @@ def add_labels_mcp(repo_name:str,issue_number:int,labels:list[str])->str:
     existing labels. Returns the issue's full label list after the add.
     Use this to tag/categorize an issue during triage."""
     return json.dumps(add_labels(repo_name,issue_number,labels))
+
+
+@mcp.tool()
+def get_issue_comments_mcp(repo_name: str, issue_number: int) -> str:
+    """Get all comments on an issue, as a JSON list of {author, body}."""
+    return json.dumps(get_issue_comments(repo_name, issue_number))

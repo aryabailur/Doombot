@@ -165,3 +165,16 @@ def add_labels(repo_name: str, issue_number: int, labels: list[str]) -> list[str
     issue.add_to_labels(*labels)
     issue = repo.get_issue(issue_number)
     return [label.name for label in issue.labels]
+
+
+def get_issue_comments(repo_name: str, issue_number: int) -> list[dict]:
+    """Return an issue's comments as [{"author": str, "body": str}].
+
+    Used by the decider to detect its own prior comment before posting, so a
+    re-run does not duplicate it.
+    """
+    issue = _get_client().get_repo(repo_name).get_issue(issue_number)
+    return [
+        {"author": c.user.login if c.user else "", "body": c.body or ""}
+        for c in issue.get_comments()
+    ]

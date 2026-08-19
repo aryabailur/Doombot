@@ -20,7 +20,7 @@ from mcp.client.stdio import stdio_client
 
 from agents.chain import chain_step
 from agents.state import GraphState
-from mcp_server.tool_names import ADD_LABELS, POST_ISSUE_COMMENT
+from mcp_server.tool_names import ADD_LABELS, GET_ISSUE_COMMENTS, POST_ISSUE_COMMENT
 
 # Above this, an issue is worth a maintainer's attention on impact alone.
 HIGH_IMPACT_THRESHOLD = 70
@@ -76,12 +76,41 @@ def _tool_text(result) -> str:
     return text
 
 
+# Every Doombot comment carries this marker so a later run can recognise its
+# own prior output. Rendered as an HTML comment, so it is invisible on GitHub
+# but present in the raw body the API returns.
+COMMENT_MARKER = "<!-- doombot -->"
+
+
+async def _already_commented(session, repo_name: str, issue_number: int) -> bool:
+    """Whether Doombot has already commented on this issue.
+
+    finalFeatures.md 9 requires not posting the same request twice before the
+    author responds, and re-running an investigation is routine -- during
+    debugging, after a crash, or when a maintainer re-triggers it. Without
+    this check each run appends another identical comment, which is exactly
+    the notification noise the product claims to reduce.
+    """
+    result = await session.call_tool(
+        GET_ISSUE_COMMENTS,
+        {"repo_name": repo_name, "issue_number": issue_number},
+    )
+    return any(COMMENT_MARKER in c.get("body", "") for c in json.loads(_tool_text(result)))
+
+
 async def _apply(repo_name: str, issue_number: int, comment: str, labels: list[str]) -> dict:
-    """Post the comment and add labels in one MCP session."""
-    applied = {"comment": False, "labels": []}
+    """Post the comment and add labels in one MCP session.
+
+    Idempotent: a second run on the same issue adds labels that are missing
+    but does not repeat a comment Doombot already left.
+    """
+    applied = {"comment": False, "labels": [], "comment_skipped": False}
     async with stdio_client(_SERVER_PARAMS) as (read_stream, write_stream):
         async with ClientSession(read_stream, write_stream) as session:
             await session.initialize()
+            if comment and await _already_commented(session, repo_name, issue_number):
+                applied["comment_skipped"] = True
+                comment = ""
             if comment:
                 result = await session.call_tool(
                     POST_ISSUE_COMMENT,
@@ -213,6 +242,8 @@ def decider_node(state: GraphState) -> tuple[dict, list[dict]]:
     """
     decision = _decide(state)
     comment = _compose_comment(decision, state)
+    if comment:
+        comment = comment + "\n\n" + COMMENT_MARKER
 
     labels = state.get("labels") or []
     suggested = state.get("labels_suggested", True)
