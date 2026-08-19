@@ -1,12 +1,13 @@
 from mcp import ClientSession,StdioServerParameters
 from mcp.client.stdio import stdio_client
 from agents.state import GraphState
+from mcp_server.tool_names import GET_PR_DETAILS, GET_PR_FILES
 import json
 import asyncio
 def fetcher_node(state:GraphState):
     server_params=StdioServerParameters(
     command="python",
-    args=["mcp_server/server.py"]
+    args=["-m", "mcp_server.server"]
      )
     async def fetch():
        async with stdio_client(server_params) as (
@@ -19,14 +20,14 @@ def fetcher_node(state:GraphState):
         ) as session:
            await session.initialize()
            result1=await session.call_tool(
-               'get_pr_details_mcp',
+               GET_PR_DETAILS,
                {
                    "repo_name":state["repo_name"],
                    "pr_number":state["pr_number"]
                }
            )
            result2=await session.call_tool(
-               "get_pullRequest_files",
+               GET_PR_FILES,
                {
                 "repo_name":state["repo_name"],
                 "pr_number":state["pr_number"]   
