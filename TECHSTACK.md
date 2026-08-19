@@ -37,6 +37,13 @@ over OpenAI for three reasons that matter at a hackathon: it's free, it's
 dramatically faster per token, and it needs no billing setup. Model is read from
 `GROQ_MODEL` so it's swappable.
 
+> **Free-tier rate limit: 8,000 tokens/minute.** Measured, not guessed. The
+> triage path is comfortably inside it — the labeler and security scanner send
+> ~200–300 tokens per issue, roughly 30x under the cap. PR review is not: it
+> sends the full diff plus retrieved code and measured **28,281 tokens** on a
+> single PR, returning `413 rate_limit_exceeded`. Issue triage is the demo;
+> PR review on a large diff needs Groq's Dev tier or diff truncation.
+
 **LangGraph** — agent orchestration. Two `StateGraph`s over one shared `TypedDict`:
 the existing PR-review graph and the new issue-triage graph. Chosen over raw
 LangChain agents because the investigation trace *is* the product — LangGraph's
