@@ -1,5 +1,3 @@
-import warnings
-
 from rag.embedder import get_collection
 
 
@@ -17,35 +15,52 @@ def retrieve_with_scores(query: str, repo_name: str, kind: str = "issues", k: in
     """Like retrieve(), but returns (Document, relevance_score) pairs from
     the named collection ("code" or "issues").
 
-    CRITICAL — score direction: this MUST use
-    similarity_search_with_relevance_scores, which returns a normalized
-    0-1 score where HIGHER IS BETTER. Do NOT use
-    similarity_search_with_score — that returns raw L2 distance, where
-    LOWER IS BETTER, and the two are easy to silently swap since both
-    return (Document, float) tuples. Inverting the number to "fix" the
-    scale is the classic bug this comment exists to prevent; always call
-    the *_relevance_scores variant instead.
+    Returns TRUE COSINE SIMILARITY: 0-1, higher is better, matching the
+    thresholds in rag/CLAUDE.md and agents/CLAUDE.md.
+
+    CRITICAL — score direction. This calls `similarity_search_with_score`,
+    which returns raw L2 **distance** (lower is better), and converts it to
+    cosine below. That is deliberate and must not be "fixed" back to
+    `similarity_search_with_relevance_scores`:
+
+    - The relevance variant does NOT return cosine. It computes
+      `1 - L2/sqrt(2)`, which compresses the scale and goes negative for
+      distant pairs. Measured on a real duplicate pair: true cosine 0.692,
+      relevance score 0.445 -- below the 0.65 "related" cut, so a genuine
+      duplicate was dropped entirely.
+    - Because all-MiniLM-L6-v2 emits L2-normalized vectors,
+      ||a-b||^2 = 2(1 - cos) holds exactly, so cos = 1 - L2^2/2 is an exact
+      recovery, not an approximation.
+
+    The trap this docstring originally warned about -- returning a distance
+    where a similarity is expected -- is still real. It is avoided here by
+    converting, not by picking the other method.
     """
     vector_db = get_collection(repo_name, kind)
 
-    # Chroma defaults to an L2 collection, and LangChain's L2->relevance
-    # conversion is `1 - distance/sqrt(2)`, which goes NEGATIVE for anything
-    # semantically distant -- an unrelated issue measured -0.35 in testing.
-    # LangChain warns about that on every call, from inside its own code, so
-    # the filter has to go here rather than around our clamp below.
-    # The warning is expected and harmless: our thresholds (>0.85 duplicate,
-    # >=0.65 related) assume a true 0-1 scale, and clamping is safe for
-    # bucketing because everything below 0.65 is dropped anyway -- the only
-    # values that survive were already in range.
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore",
-            message="Relevance scores must be between",
-            category=UserWarning,
-        )
-        results = vector_db.similarity_search_with_relevance_scores(query, k=k)
+    # Return TRUE COSINE SIMILARITY, recovered from Chroma's L2 distance.
+    #
+    # Chroma defaults to an L2 collection and LangChain converts that to a
+    # "relevance score" as `1 - L2/sqrt(2)`. That conversion is not cosine and
+    # badly compresses the scale: a real duplicate pair measured cosine 0.692
+    # but was reported as 0.445, and an unrelated pair came back NEGATIVE
+    # (-0.35), which LangChain itself warns about.
+    #
+    # Every threshold in rag/CLAUDE.md and agents/CLAUDE.md (>0.85 duplicate,
+    # 0.65-0.85 related) is specified as cosine, so using the raw relevance
+    # score silently under-scores every match and drops genuine duplicates --
+    # the exact failure the thresholds exist to catch.
+    #
+    # all-MiniLM-L6-v2 emits L2-normalized vectors, so for unit vectors
+    # ||a-b||^2 = 2(1 - cos), giving cos = 1 - L2^2/2 exactly. Verified: this
+    # recovers 0.692 from the same pair LangChain scored 0.445.
+    results = vector_db.similarity_search_with_score(query, k=k)
 
-    return [(doc, max(0.0, min(1.0, score))) for doc, score in results]
+    scored = []
+    for doc, l2 in results:
+        cosine = 1.0 - (l2 * l2) / 2.0
+        scored.append((doc, max(0.0, min(1.0, cosine))))
+    return scored
 
 
 def find_duplicates(issue_text: str, repo_name: str, exclude_number=None) -> dict:
