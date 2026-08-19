@@ -7,6 +7,7 @@ venv/
 
 # Local data stores
 chroma_db/
+chroma_*/          # scratch indexes from local test runs
 *.db
 *.db-wal
 *.db-shm
