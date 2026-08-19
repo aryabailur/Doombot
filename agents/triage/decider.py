@@ -32,6 +32,25 @@ _SERVER_PARAMS = StdioServerParameters(
 )
 
 
+def _root_cause(exc: BaseException, depth: int = 0) -> str:
+    """Unwrap an exception to the most specific message available.
+
+    MCP runs tool calls inside an anyio task group, so any failure surfaces as
+    an ExceptionGroup whose str() is "unhandled errors in a TaskGroup (1
+    sub-exception)" -- true and useless. The operator needs to see "403
+    Forbidden", which is the difference between "my token lacks Issues:write"
+    and "something broke."
+    """
+    if depth > 5:
+        return str(exc)
+    inner = getattr(exc, "exceptions", None)
+    if inner:
+        return _root_cause(inner[0], depth + 1)
+    if exc.__cause__ is not None:
+        return _root_cause(exc.__cause__, depth + 1)
+    return f"{type(exc).__name__}: {exc}"
+
+
 def _writes_enabled() -> bool:
     """Whether this run may touch GitHub.
 
@@ -43,6 +62,20 @@ def _writes_enabled() -> bool:
     return os.getenv("DEMO_MODE", "0") != "1"
 
 
+def _tool_text(result) -> str:
+    """Extract text from an MCP tool result, raising if the call failed.
+
+    MCP reports tool failures via `isError` on an otherwise well-formed
+    response -- it does not raise. Without this check a 403 from GitHub looks
+    like success, and the dashboard would claim a comment was posted that
+    never was. Reporting a write that did not happen is worse than failing.
+    """
+    text = result.content[0].text if result.content else ""
+    if getattr(result, "isError", False):
+        raise RuntimeError(text or "MCP tool call failed")
+    return text
+
+
 async def _apply(repo_name: str, issue_number: int, comment: str, labels: list[str]) -> dict:
     """Post the comment and add labels in one MCP session."""
     applied = {"comment": False, "labels": []}
@@ -50,11 +83,12 @@ async def _apply(repo_name: str, issue_number: int, comment: str, labels: list[s
         async with ClientSession(read_stream, write_stream) as session:
             await session.initialize()
             if comment:
-                await session.call_tool(
+                result = await session.call_tool(
                     POST_ISSUE_COMMENT,
                     {"repo_name": repo_name, "issue_number": issue_number,
                      "comment": comment},
                 )
+                _tool_text(result)
                 applied["comment"] = True
             if labels:
                 result = await session.call_tool(
@@ -62,7 +96,7 @@ async def _apply(repo_name: str, issue_number: int, comment: str, labels: list[s
                     {"repo_name": repo_name, "issue_number": issue_number,
                      "labels": labels},
                 )
-                applied["labels"] = json.loads(result.content[0].text)
+                applied["labels"] = json.loads(_tool_text(result))
     return applied
 
 
@@ -146,6 +180,17 @@ def _compose_comment(decision: dict, state: GraphState) -> str:
         )
 
     if action == "escalate":
+        # NEVER interpolate decision["reason"] here. For a security escalation
+        # that string names the matched keywords ("api key", "auth bypass"),
+        # and DESIGN.md 12 keeps suspected vulnerabilities private by default
+        # -- publishing the specifics on a public issue IS the disclosure the
+        # policy forbids. The detail belongs in the dashboard, which is
+        # access-controlled; the public comment only says a human should look.
+        if state.get("security_findings"):
+            return (
+                "Doombot has flagged this issue for maintainer review.\n\n"
+                "Details are available to maintainers in the Doombot dashboard."
+            )
         return (
             "Doombot has flagged this issue for maintainer review.\n\n"
             f"{decision['reason']}"
@@ -198,11 +243,16 @@ def decider_node(state: GraphState) -> tuple[dict, list[dict]]:
         except Exception as exc:
             # A failed write must not lose the decision -- the dashboard still
             # shows what Doombot concluded and that the write needs a retry.
+            # MCP wraps failures in an anyio ExceptionGroup whose str() is the
+            # useless "unhandled errors in a TaskGroup", so unwrap to the real
+            # cause; a 403 here means the token lacks Issues:write, and the
+            # operator needs to be told that, not the plumbing.
+            detail = _root_cause(exc)
             evidence.append({
                 "type": "rule", "ref": "write_failed", "score": None,
-                "snippet": f"GitHub write failed: {exc}",
+                "snippet": f"GitHub write failed: {detail}",
             })
-            return {"decision": {**decision, "applied": {"error": str(exc)}}}, evidence
+            return {"decision": {**decision, "applied": {"error": detail}}}, evidence
 
     if suggested and labels:
         evidence.append({
