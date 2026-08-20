@@ -85,6 +85,13 @@ export interface HealthResponse {
   score: number;
   breakdown: HealthBreakdown;
   history: HealthPoint[];
+  /**
+   * False when the repository has no issues to measure. Three of the four
+   * sub-scores return 100 for an empty backlog, so an unread repo would
+   * otherwise report a confident 100/100.
+   */
+  measured: boolean;
+  issue_count: number;
 }
 
 export interface RepoSummary {

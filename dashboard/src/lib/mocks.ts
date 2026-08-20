@@ -38,6 +38,8 @@ export const mockHealth: HealthResponse = {
     ts: new Date(Date.now() - (6 - i) * 86400_000).toISOString(),
     score: 74 + i * 1.3,
   })),
+  measured: true,
+  issue_count: 24,
 };
 
 export const mockInvestigations: InvestigationSummary[] = [

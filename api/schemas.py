@@ -82,6 +82,12 @@ class HealthResponse(BaseModel):
     score: float
     breakdown: HealthBreakdown
     history: list[HealthPoint]
+    # Additive, defaulted: a repository with no issues has no measured health,
+    # and three of the four sub-scores return 100 for an empty backlog. Without
+    # this the dashboard showed a confident 100/100 for a repo it had never
+    # been able to read. Defaults keep every existing caller valid.
+    measured: bool = True
+    issue_count: int = 0
 
 
 class RepoSummary(BaseModel):

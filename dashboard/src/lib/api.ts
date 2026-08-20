@@ -86,9 +86,29 @@ export function createInvestigation(
   return request("/api/investigations", { method: "POST", body: JSON.stringify(req) });
 }
 
-export function listInvestigations(): Promise<InvestigationSummary[]> {
+/**
+ * Investigate a repository's open issues (bounded).
+ *
+ * The dashboard could select a repository but had no way to make the agent
+ * look at it, so an added repo was simply never analysed.
+ */
+export function scanRepository(
+  owner: string,
+  repo: string,
+  limit = 5,
+): Promise<{ repo_name: string; queued: number[]; skipped_already_investigated: number }> {
+  return request(`/api/repos/${owner}/${repo}/scan?limit=${limit}`, {
+    method: "POST",
+  });
+}
+
+/** Optionally scoped to one repository; omit to list every repo's work. */
+export function listInvestigations(
+  repoName?: string,
+): Promise<InvestigationSummary[]> {
   if (USE_MOCKS) return delay().then(() => mockInvestigations);
-  return request("/api/investigations");
+  const query = repoName ? `?repo_name=${encodeURIComponent(repoName)}` : "";
+  return request(`/api/investigations${query}`);
 }
 
 export function getInvestigation(id: string): Promise<InvestigationDetail> {
@@ -96,9 +116,10 @@ export function getInvestigation(id: string): Promise<InvestigationDetail> {
   return request(`/api/investigations/${id}`);
 }
 
-export function listEscalations(): Promise<Escalation[]> {
+export function listEscalations(repoName?: string): Promise<Escalation[]> {
   if (USE_MOCKS) return delay().then(() => mockEscalations);
-  return request("/api/escalations");
+  const query = repoName ? `?repo_name=${encodeURIComponent(repoName)}` : "";
+  return request(`/api/escalations${query}`);
 }
 
 export function postFeedback(req: FeedbackRequest): Promise<{ ok: boolean }> {

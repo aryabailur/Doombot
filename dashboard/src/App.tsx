@@ -42,11 +42,42 @@ import {
   listEscalations,
   listInvestigations,
   postFeedback,
+  scanRepository,
   WS_URL,
 } from '@/lib/api'
-import type { Escalation, HealthResponse } from '@/lib/types'
+import type { Escalation, HealthResponse, RepoSummary } from '@/lib/types'
 import { useApiData } from '@/lib/useApiData'
 import { useSocket, type WsEnvelope } from '@/lib/useSocket'
+
+/**
+ * The repository list for the selector: what the API knows, plus anything
+ * added this session, plus the current selection.
+ *
+ * Every entry the API did not supply gets zeroed counters rather than
+ * invented ones -- the real values arrive with the next /api/repos response.
+ */
+function mergeRepos(
+  fromApi: RepoSummary[] | null,
+  added: string[],
+  current: string,
+): RepoSummary[] {
+  const merged = [...(fromApi ?? [])]
+  const seen = new Set(merged.map((repo) => repo.repo_name))
+
+  for (const name of [...added, current]) {
+    if (!name || seen.has(name)) {
+      continue
+    }
+    seen.add(name)
+    merged.push({
+      repo_name: name,
+      health_score: 0,
+      open_investigations: 0,
+      last_scan: null,
+    })
+  }
+  return merged
+}
 
 /** Split "owner/repo" for the path-segmented endpoints. */
 function splitRepo(full: string): [string, string] {
@@ -103,8 +134,12 @@ function OverviewPage({ repoName }: { repoName: string }) {
   const health = useApiData<HealthResponse>(() => getRepoHealth(owner, repo), {
     pollMs: 60_000,
   })
-  const escalations = useApiData(() => listEscalations(), { pollMs: 20_000 })
-  const investigations = useApiData(() => listInvestigations(), {
+  // Scoped to the selected repository. Unscoped, every panel showed another
+  // repository's work, which read as "it did not analyse my repo".
+  const escalations = useApiData(() => listEscalations(repoName), {
+    pollMs: 20_000,
+  })
+  const investigations = useApiData(() => listInvestigations(repoName), {
     pollMs: 20_000,
   })
 
@@ -135,6 +170,7 @@ function OverviewPage({ repoName }: { repoName: string }) {
         {health.data ? (
           <HealthScoreCard
             components={toComponents(health.data)}
+            measured={health.data.measured}
             overallScore={health.data.score}
           />
         ) : (
@@ -172,7 +208,7 @@ function OverviewPage({ repoName }: { repoName: string }) {
   )
 }
 
-function EscalationsPage() {
+function EscalationsPage({ repoName }: { repoName: string }) {
   const navigate = useNavigate()
   const [filters, setFilters] = useState<EscalationFilters>({})
   const [selectedId, setSelectedId] = useState<string | undefined>()
@@ -180,7 +216,9 @@ function EscalationsPage() {
     Record<string, EscalationRow['status']>
   >({})
 
-  const escalations = useApiData(() => listEscalations(), { pollMs: 20_000 })
+  const escalations = useApiData(() => listEscalations(repoName), {
+    pollMs: 20_000,
+  })
 
   const rows = (escalations.data ?? []).map((item) => {
     const row = toRow(item)
@@ -232,10 +270,10 @@ function EscalationsPage() {
   )
 }
 
-function InvestigationsPage() {
+function InvestigationsPage({ repoName }: { repoName: string }) {
   const navigate = useNavigate()
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const investigations = useApiData(() => listInvestigations(), {
+  const investigations = useApiData(() => listInvestigations(repoName), {
     pollMs: 15_000,
   })
 
@@ -410,10 +448,26 @@ export function App() {
   // One repository per session. A selector exists, but every endpoint is
   // per-repo and nothing needs cross-repo aggregation yet.
   const [repoName, setRepoName] = useState('aryabailur/Doombot')
+  /**
+   * Repositories added this session.
+   *
+   * GET /api/repos derives its list from investigation history plus the
+   * monitor list, and indexing creates neither -- so a freshly added
+   * repository is absent from that response and would drop out of the
+   * dropdown the moment the list refreshed. Holding the names here keeps a
+   * repo selectable from the instant it is added until its first
+   * investigation gives the backend a record of it.
+   */
+  const [addedRepos, setAddedRepos] = useState<string[]>([])
   const [indexing, setIndexing] = useState(false)
+  const [scanning, setScanning] = useState(false)
+  const [scanNote, setScanNote] = useState<string | null>(null)
   const [owner, repo] = splitRepo(repoName)
 
   const repos = useApiData(() => getRepos(), {})
+
+  /** What the API knows, plus anything added this session, plus the selection. */
+  const selectableRepos = mergeRepos(repos.data, addedRepos, repoName)
 
   // One socket for the shell, purely to drive the connection indicator. The
   // detail page opens its own for step events -- the hub broadcasts to every
@@ -439,23 +493,82 @@ export function App() {
                   setIndexing(false)
                 }
               }}
+              isScanning={scanning}
+              onScanRequested={async (target) => {
+                setScanning(true)
+                setScanNote(null)
+                try {
+                  const [scanOwner, scanRepo] = splitRepo(target.repo_name)
+                  const result = await scanRepository(scanOwner, scanRepo)
+                  // Say what happened. "Nothing queued" is a real and
+                  // common outcome -- every open issue already investigated --
+                  // and silence there is indistinguishable from a failure.
+                  setScanNote(
+                    result.queued.length > 0
+                      ? `Investigating ${result.queued.length} issue${result.queued.length === 1 ? '' : 's'} in ${result.repo_name}.`
+                      : `Nothing new to investigate in ${result.repo_name}.`,
+                  )
+                } catch (cause) {
+                  setScanNote(
+                    cause instanceof Error
+                      ? `Could not analyse: ${cause.message}`
+                      : 'Could not analyse that repository.',
+                  )
+                } finally {
+                  setScanning(false)
+                }
+              }}
+              onAddRepository={async (name) => {
+                const [nextOwner, nextRepo] = splitRepo(name)
+
+                // Scan first, and let it throw. It is the only step that
+                // reads the repository synchronously, so it is the only one
+                // that can tell a real public repo from a typo: indexing is
+                // fire-and-forget (202-style, work happens in a thread), so
+                // awaiting it succeeds even for a repository that does not
+                // exist. Adding a bad name must not look like success.
+                const result = await scanRepository(nextOwner, nextRepo)
+
+                // Indexing feeds duplicate detection and the issue graph.
+                // Deliberately not awaited: embedding a large backlog takes
+                // far longer than a click should block for, and the scan
+                // above already established the repo is real.
+                void indexRepo(nextOwner, nextRepo)
+
+                setAddedRepos((current) =>
+                  current.includes(name) ? current : [...current, name],
+                )
+                setRepoName(name)
+                setScanNote(
+                  result.queued.length > 0
+                    ? `Added ${name} — investigating ${result.queued.length} issue${result.queued.length === 1 ? '' : 's'}.`
+                    : `Added ${name} — no open issues to investigate.`,
+                )
+                repos.reload()
+              }}
               onSelect={(next) => setRepoName(next.repo_name)}
-              repos={
-                repos.data?.length
-                  ? repos.data
-                  : [
-                      {
-                        repo_name: repoName,
-                        health_score: 0,
-                        open_investigations: 0,
-                        last_scan: null,
-                      },
-                    ]
-              }
-              selectedRepo={repos.data?.find(
+              repos={selectableRepos}
+              // Resolved against the merged list, not repos.data. A freshly
+              // added repository is not in the API response yet -- indexing
+              // creates no investigation record, so /api/repos cannot know
+              // about it -- and looking it up there returned undefined, which
+              // hid both the Index and Analyse buttons. The repo appeared in
+              // the dropdown while being impossible to act on: exactly the
+              // "Analyse just disappeared" symptom.
+              selectedRepo={selectableRepos.find(
                 (item) => item.repo_name === repoName,
               )}
             />
+            {scanNote ? (
+              <button
+                className="max-w-md truncate rounded-md border border-border bg-surface-2 px-2 py-1 text-left text-xs text-text-secondary"
+                onClick={() => setScanNote(null)}
+                title={`${scanNote} (click to dismiss)`}
+                type="button"
+              >
+                {scanNote}
+              </button>
+            ) : null}
             <AgentStatusIndicator
               className="ml-auto"
               connectionState={connectionState}
@@ -471,8 +584,14 @@ export function App() {
             element={<OverviewPage repoName={repoName} />}
             path="/overview"
           />
-          <Route element={<EscalationsPage />} path="/escalations" />
-          <Route element={<InvestigationsPage />} path="/investigations" />
+          <Route
+            element={<EscalationsPage repoName={repoName} />}
+            path="/escalations"
+          />
+          <Route
+            element={<InvestigationsPage repoName={repoName} />}
+            path="/investigations"
+          />
           <Route
             element={<InvestigationDetailPage />}
             path="/investigations/:id"

@@ -159,7 +159,23 @@ def compute(repo_name: str, use_cache: bool = True) -> dict:
         "duplication": _duplication(repo_name, issues),
     }
     score = sum(breakdown[key] * WEIGHTS[key] for key in WEIGHTS)
-    result = {"score": round(score, 1), "breakdown": breakdown}
+
+    # A repository with no issues at all has no measured health.
+    #
+    # Three of the four sub-scores return 100.0 for an empty backlog, since
+    # "no stale issues" and "no unanswered issues" are literally true. Summed,
+    # that reported a confident 100/100 for a repository the agent had never
+    # been able to look at -- indistinguishable from a genuinely pristine
+    # project, and the single most misleading number the dashboard could show.
+    # `measured: False` lets the UI say "not enough data" instead of inventing
+    # a perfect score.
+    measured = bool(issues)
+    result = {
+        "score": round(score, 1),
+        "breakdown": breakdown,
+        "measured": measured,
+        "issue_count": len(issues),
+    }
     _cache[repo_name] = (time.monotonic(), result)
     return result
 
