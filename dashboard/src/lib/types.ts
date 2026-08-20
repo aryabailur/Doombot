@@ -92,6 +92,8 @@ export interface HealthResponse {
    */
   measured: boolean;
   issue_count: number;
+  /** True when the issues could not be read (rate limit, network, access). */
+  unreadable: boolean;
 }
 
 export interface RepoSummary {
@@ -125,7 +127,12 @@ export interface IndexJobResponse {
 }
 
 export interface WsEnvelope<T = unknown> {
-  type: "step.started" | "step.completed" | "investigation.completed" | "activity";
+  type:
+    | "step.started"
+    | "step.completed"
+    | "investigation.completed"
+    | "activity"
+    | "pipeline";
   data: T;
 }
 

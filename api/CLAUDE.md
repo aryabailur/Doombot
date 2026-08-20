@@ -163,6 +163,7 @@ class HealthResponse(BaseModel):
     history: list[HealthPoint]
     measured: bool = True      # False when the repo has no issues to score
     issue_count: int = 0
+    unreadable: bool = False   # True when issues could not be read at all
 
 class RepoSummary(BaseModel):
     repo_name: str

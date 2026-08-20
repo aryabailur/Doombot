@@ -144,6 +144,7 @@ def compute(repo_name: str, use_cache: bool = True) -> dict:
         if cached and (time.monotonic() - cached[0]) < _CACHE_TTL:
             return cached[1]
 
+    unreadable = False
     try:
         from mcp_server.github_client import get_issues
 
@@ -151,6 +152,11 @@ def compute(repo_name: str, use_cache: bool = True) -> dict:
     except Exception:
         logger.exception("health: could not fetch issues for %s", repo_name)
         issues = []
+        # "We could not read the issues" and "there are no issues" produce the
+        # same empty list and are completely different facts. Conflating them
+        # tells a user their busy repository is empty -- which is what happened
+        # under an exhausted GitHub quota.
+        unreadable = True
 
     breakdown = {
         "security": _security(repo_name),
@@ -175,8 +181,12 @@ def compute(repo_name: str, use_cache: bool = True) -> dict:
         "breakdown": breakdown,
         "measured": measured,
         "issue_count": len(issues),
+        "unreadable": unreadable,
     }
-    _cache[repo_name] = (time.monotonic(), result)
+    if not unreadable:
+        # Deliberately not cached: a failure caused by a rate limit would
+        # otherwise be served for the full TTL after the quota recovered.
+        _cache[repo_name] = (time.monotonic(), result)
     return result
 
 

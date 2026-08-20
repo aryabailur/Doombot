@@ -40,6 +40,7 @@ export const mockHealth: HealthResponse = {
   })),
   measured: true,
   issue_count: 24,
+  unreadable: false,
 };
 
 export const mockInvestigations: InvestigationSummary[] = [

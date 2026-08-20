@@ -108,6 +108,9 @@ HEALTH_RESPONSE = {
     # repository reported a confident 100/100.
     "measured": (bool,),
     "issue_count": (int,),
+    # True when the issues could not be read at all, which is a different fact
+    # from a repository that has none.
+    "unreadable": (bool,),
 }
 
 REPO_SUMMARY = {

@@ -51,9 +51,16 @@ function classify(error: unknown): ErrorKind {
  */
 export function useApiData<T>(
   fetcher: () => Promise<T>,
-  options: { pollMs?: number; fallback?: T } = {},
+  options: { pollMs?: number; fallback?: T; refreshKey?: number | string } = {},
 ): AsyncState<T> {
-  const { pollMs, fallback } = options
+  /**
+   * `refreshKey` exists because the fetcher is deliberately held in a ref, so
+   * changing it cannot retrigger a load. Polling alone means a screen can sit
+   * up to `pollMs` behind reality -- and when an investigation finishes, the
+   * data every panel is showing has just changed. Bumping this key refetches
+   * at that moment instead of waiting out the interval.
+   */
+  const { pollMs, fallback, refreshKey } = options
 
   const [data, setData] = useState<T | null>(fallback ?? null)
   const [error, setError] = useState<ErrorKind | null>(null)
@@ -85,7 +92,7 @@ export function useApiData<T>(
     }
     const timer = setInterval(() => void load(), pollMs)
     return () => clearInterval(timer)
-  }, [load, pollMs])
+  }, [load, pollMs, refreshKey])
 
   return {
     // A fallback is shown only until the first real response lands, so the

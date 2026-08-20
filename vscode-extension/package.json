@@ -29,6 +29,10 @@
         "title": "Doombot: Trigger Repository Scan"
       },
       {
+        "command": "doombot.scanRepository",
+        "title": "Doombot: Analyse Repository"
+      },
+      {
         "command": "doombot.refreshEscalations",
         "title": "Doombot: Refresh Escalations"
       }
