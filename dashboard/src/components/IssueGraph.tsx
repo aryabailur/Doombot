@@ -247,6 +247,8 @@ function IssueRelationshipGraph({
   const graphRef = useRef<GraphHandle | null>(null)
   /** Node list handed to us by the simulation, for the gravity force. */
   const simNodes = useRef<SimNode[]>([])
+  /** Node count at the last auto-fit, so hover cannot re-frame the view. */
+  const fittedCount = useRef<number | null>(null)
   const [hidden, setHidden] = useState<Set<GraphCategory>>(new Set())
   const [selectedLink, setSelectedLink] = useState<GraphLink | null>(null)
 
@@ -660,7 +662,16 @@ function IssueRelationshipGraph({
           // the frame to be read at all.
           cooldownTicks={120}
           d3VelocityDecay={0.3}
-          onEngineStop={() => graphRef.current?.zoomToFit(400, 60)}
+          // Gated for the same reason as the code graph: hover is state, and
+          // an ungated fit here re-framed the camera every time the pointer
+          // crossed a node. Only a change in node count re-enables it.
+          onEngineStop={() => {
+            if (fittedCount.current === data.nodes.length) {
+              return
+            }
+            fittedCount.current = data.nodes.length
+            graphRef.current?.zoomToFit(400, 60)
+          }}
           onLinkClick={(link) => setSelectedLink(link as GraphLink)}
           onNodeClick={(node) => onSelectIssue?.(node as GraphNode)}
           onNodeHover={(node) =>
@@ -1192,16 +1203,41 @@ function CodeGraphExplorer({
     [focus],
   )
 
+  /**
+   * Auto-fit the camera, but only when the graph itself changes.
+   *
+   * `cooldownTicks={1}` means the engine stops on essentially every render,
+   * so wiring zoomToFit directly to onEngineStop made *any* state change
+   * refit the camera. Once hover became state, moving the mouse across a node
+   * re-rendered, the engine stopped, and the view zoomed out -- so hovering
+   * fought the user for control of the camera instead of highlighting links.
+   *
+   * The key below changes only when the data or viewport does. onEngineStop
+   * asks to fit; this grants it at most once per key.
+   */
+  const fitKey = `${dimension}:${filtered.nodes.length}:${canvasWidth}`
+  const fittedKey = useRef<string | null>(null)
+
+  const fitOnce = useCallback(() => {
+    if (fittedKey.current === fitKey) {
+      return
+    }
+    fittedKey.current = fitKey
+    graphRef.current?.zoomToFit(reducedMotion ? 0 : 400, 56)
+  }, [fitKey, reducedMotion])
+
   useEffect(() => {
     if (typeof window === 'undefined') {
       return
     }
+    // A new key means genuinely new data, so allow one more fit.
+    fittedKey.current = null
     const frame = window.setTimeout(
-      () => graphRef.current?.zoomToFit(reducedMotion ? 0 : 400, 56),
+      () => fitOnce(),
       reducedMotion ? 0 : 120,
     )
     return () => window.clearTimeout(frame)
-  }, [canvasWidth, dimension, filtered.nodes.length, reducedMotion])
+  }, [fitKey, fitOnce, reducedMotion])
 
   const selectNode = (node: CodeGraphNode) => {
     setSelectedNode(node)
@@ -1559,9 +1595,7 @@ function CodeGraphExplorer({
                   nodeVal={(raw) =>
                     3 + Math.min(10, (raw as CodeGraphNode).hub_score * 14)
                   }
-                  onEngineStop={() =>
-                    graphRef.current?.zoomToFit(reducedMotion ? 0 : 400, 56)
-                  }
+                  onEngineStop={() => fitOnce()}
                   onLinkClick={(raw) => selectLink(raw as MutableCodeLink)}
                   onNodeClick={(raw) => selectNode(raw as CodeGraphNode)}
                   onNodeHover={(raw) =>
@@ -1613,9 +1647,7 @@ function CodeGraphExplorer({
                     const node = raw as CodeGraphNode
                     return `${node.symbol_name} — ${node.file_path}:${node.start_line} — ${impactLabel(node)}`
                   }}
-                  onEngineStop={() =>
-                    graphRef.current?.zoomToFit(reducedMotion ? 0 : 400, 56)
-                  }
+                  onEngineStop={() => fitOnce()}
                   onLinkClick={(raw) => selectLink(raw as MutableCodeLink)}
                   onNodeClick={(raw) => selectNode(raw as CodeGraphNode)}
                   onNodeHover={(raw) =>
