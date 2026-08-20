@@ -11,7 +11,16 @@ from pydantic import BaseModel
 class Evidence(BaseModel):
     type: str
     ref: str
-    score: float
+    # Optional, per the documented evidence contract in agents/CLAUDE.md 3.6:
+    # "score: float | None -- similarity or confidence score if applicable,
+    # else None". A rule-type item has no score to give, so security_scanner
+    # and the deterministic label overrides all emit None legitimately.
+    #
+    # Declared non-nullable, this rejected the agents' own output: every
+    # investigation whose chain contained one rule item failed validation and
+    # GET /api/investigations/{id} returned 500, so the whole investigation
+    # detail page was unreachable. The data was correct; the schema was not.
+    score: float | None = None
     snippet: str
 
 
