@@ -7,6 +7,8 @@ import {
   pollSeconds,
   repository,
   scanRepository,
+  searchIssues,
+  type SearchResult,
 } from './api'
 import { EscalationsTreeProvider, InvestigationsTreeProvider } from './trees'
 
@@ -61,6 +63,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('doombot.scanRepository', scanWholeRepo),
     vscode.commands.registerCommand('doombot.refreshEscalations', () =>
       refreshAll(),
+    ),
+    vscode.commands.registerCommand('doombot.searchIssues', () =>
+      runSearch(context),
     ),
   )
 
@@ -218,6 +223,159 @@ async function triggerScan(): Promise<void> {
  * separate product with different logic" as a spec conflict, so the
  * extension shows the same UI C and D already built.
  */
+/** A result's one-line summary: state, engagement, and the agent's verdict. */
+function describeResult(result: SearchResult): string {
+  const parts = [
+    `${Math.round(result.score * 100)}% match`,
+    result.state,
+    `${result.comments} comments`,
+  ]
+  if (result.labels.length > 0) {
+    parts.push(result.labels.slice(0, 3).join(', '))
+  }
+  if (result.agent?.decision) {
+    const verdict = result.agent.decision.replace(/_/g, ' ')
+    const confidence =
+      typeof result.agent.confidence === 'number'
+        ? ` ${Math.round(result.agent.confidence * 100)}%`
+        : ''
+    parts.push(`agent: ${verdict}${confidence}`)
+  }
+  return parts.join(' · ')
+}
+
+/**
+ * Ask a plain-English question and pick from the answers.
+ *
+ * A QuickPick, not a webview, despite the feature spec asking for one. Two
+ * reasons, and they point the same way:
+ *
+ * - DESIGN.md 4 treats reimplementing dashboard UI natively as a spec
+ *   conflict, which is why `openIssueGraph` frames the dashboard rather than
+ *   drawing a graph here. A hand-built HTML result list would be exactly that
+ *   -- a second implementation of a view the dashboard already renders, free to
+ *   drift from it.
+ * - A ranked list you filter by typing and select with the keyboard is what a
+ *   QuickPick already is. An iframe of the same list is slower to open, cannot
+ *   be filtered, and needs the mouse.
+ *
+ * Selecting a result opens the investigation the agent already recorded for
+ * that issue, and falls back to the issue on GitHub when there is none -- the
+ * spec's "opens the investigation view" only exists for triaged issues.
+ */
+async function runSearch(context: vscode.ExtensionContext): Promise<void> {
+  const repo = repository()
+  if (!repo.includes('/')) {
+    void vscode.window.showWarningMessage(
+      'Set `doombot.repository` to owner/repo first.',
+    )
+    return
+  }
+
+  const query = await vscode.window.showInputBox({
+    title: `Search ${repo}`,
+    prompt: 'Ask in plain English — meaning, not keywords',
+    placeHolder: 'performance complaints nobody responded to',
+    ignoreFocusOut: true,
+  })
+  if (!query?.trim()) {
+    return
+  }
+
+  const response = await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: `Searching ${repo}…`,
+      cancellable: false,
+    },
+    async () => {
+      try {
+        return await searchIssues(repo, query, 20)
+      } catch (cause) {
+        void vscode.window.showErrorMessage(
+          `Doombot search failed: ${
+            cause instanceof Error ? cause.message : 'the API is unreachable'
+          }`,
+        )
+        return null
+      }
+    },
+  )
+  if (!response) {
+    return
+  }
+
+  if (response.stats.indexed === 0) {
+    void vscode.window.showInformationMessage(
+      `${repo} has no indexed issues yet. Search reads the RAG index, not GitHub — run Doombot: Trigger Repository Scan first.`,
+    )
+    return
+  }
+  if (response.results.length === 0) {
+    void vscode.window.showInformationMessage(
+      `Nothing matched. ${response.stats.indexed} issues were searched.`,
+    )
+    return
+  }
+
+  const items = response.results.map((result) => ({
+    label: `#${result.number} ${result.title}`,
+    description: describeResult(result),
+    detail: result.snippet || undefined,
+    result,
+  }))
+
+  // The parsed query goes in the title, not a separate dialog. It is the one
+  // piece of information that explains a surprising result set, and burying it
+  // behind another interaction means nobody ever sees it.
+  const readAs = response.intent.understood
+    ? `read as “${response.intent.semantic_query}”`
+    : 'searched literally — query understanding was unavailable'
+  const dropped =
+    response.stats.below_floor > 0
+      ? `, ${response.stats.below_floor} too weak to show`
+      : ''
+
+  const picked = await vscode.window.showQuickPick(items, {
+    title: `${response.results.length} of ${response.stats.indexed} — ${readAs}${dropped}`,
+    placeHolder: 'Select an issue to open what Doombot concluded about it',
+    matchOnDescription: true,
+    matchOnDetail: true,
+  })
+  if (!picked) {
+    return
+  }
+
+  const investigation = picked.result.agent?.investigation_id
+  if (investigation) {
+    openDashboard(context, `/investigations/${investigation}`)
+    return
+  }
+
+  // Never triaged, so there is no investigation to show. Offering the issue
+  // itself beats opening an empty page and calling it a result.
+  const choice = await vscode.window.showInformationMessage(
+    `Doombot has not investigated #${picked.result.number} yet.`,
+    'Open on GitHub',
+    'Investigate now',
+  )
+  if (choice === 'Open on GitHub') {
+    void vscode.env.openExternal(
+      vscode.Uri.parse(
+        `https://github.com/${repo}/issues/${picked.result.number}`,
+      ),
+    )
+  } else if (choice === 'Investigate now' && picked.result.number !== null) {
+    const started = await createInvestigation(repo, 'issue', picked.result.number)
+    void (started
+      ? vscode.window.showInformationMessage(
+          `Investigating #${picked.result.number}…`,
+        )
+      : vscode.window.showErrorMessage('Could not start that investigation.'))
+    await refreshAll()
+  }
+}
+
 function openDashboard(
   context: vscode.ExtensionContext,
   route?: string,

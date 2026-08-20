@@ -17,6 +17,10 @@
   "contributes": {
     "commands": [
       {
+        "command": "doombot.searchIssues",
+        "title": "Doombot: Search Issues"
+      },
+      {
         "command": "doombot.openDashboard",
         "title": "Doombot: Open Dashboard"
       },

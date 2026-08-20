@@ -64,6 +64,67 @@ export interface HealthResponse {
   issue_count?: number
 }
 
+/**
+ * Semantic search over a repository's indexed issue history.
+ *
+ * Mirrors `api/schemas.py`'s Search* models, and must stay in step with
+ * `dashboard/src/lib/types.ts` -- this package has no build relationship with
+ * the dashboard, so the mirror is maintained by hand in both places.
+ */
+export interface SearchIntent {
+  semantic_query: string
+  state: string | null
+  created_after: string | null
+  created_before: string | null
+  labels: string[]
+  author: string | null
+  unanswered: boolean
+  min_reactions: number | null
+  sort: string
+  /** False when only the literal text was searched -- surface it, do not hide it. */
+  understood: boolean
+  note: string
+}
+
+export interface SearchAgentContext {
+  investigation_id: string | null
+  decision: string | null
+  confidence: number | null
+  status: string | null
+}
+
+export interface SearchResult {
+  number: number | null
+  title: string
+  state: string
+  labels: string[]
+  author: string
+  created_at: string
+  comments: number
+  reactions: number
+  score: number
+  snippet: string
+  rank_score: number
+  agent: SearchAgentContext | null
+}
+
+export interface SearchStats {
+  considered: number
+  returned: number
+  filter_mode: string
+  indexed: number
+  below_floor: number
+}
+
+export interface SearchResponse {
+  repo_name: string
+  query: string
+  intent: SearchIntent
+  results: SearchResult[]
+  stats: SearchStats
+}
+
+
 function config() {
   return vscode.workspace.getConfiguration('doombot')
 }
@@ -165,4 +226,27 @@ export async function createInvestigation(
   } catch {
     return false
   }
+}
+
+/**
+ * Ask a natural-language question about a repository's indexed issues.
+ *
+ * Unlike the polled endpoints, this one throws rather than returning null. A
+ * search is a thing the user just asked for on purpose, so a failure needs to
+ * reach them as a message -- silently returning nothing would read as "there
+ * are no matching issues", which is a different and wrong answer.
+ */
+export async function searchIssues(
+  repo: string,
+  query: string,
+  k = 20,
+): Promise<SearchResponse> {
+  const params = new URLSearchParams({ q: query, k: String(k) })
+  const response = await fetch(
+    `${apiBaseUrl()}/api/repos/${repo}/search?${params.toString()}`,
+  )
+  if (!response.ok) {
+    throw new Error(`The API returned ${response.status}.`)
+  }
+  return (await response.json()) as SearchResponse
 }
