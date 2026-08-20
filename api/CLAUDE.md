@@ -94,9 +94,17 @@ Exact field names and types — no others, no renames.
 
 ```python
 class Evidence(BaseModel):
-    type: str            # e.g. "duplicate", "security", "file"
-    ref: str              # e.g. issue number, file path, commit sha
-    score: float
+    # CLOSED union, not a bare str. These four are what the agent actually
+    # emits (agents/CLAUDE.md 3.6). The earlier example comment here read
+    # "duplicate", "security", "file" -- none of which the backend produces --
+    # and Stream A's mocks were written against it, which the tightened
+    # frontend type then rejected. Keep this list and agents/CLAUDE.md 3.6
+    # identical.
+    type: Literal["issue", "pr", "file", "rule"]
+    ref: str              # issue/PR number, file path, or rule/keyword name
+    # Nullable: rule-type evidence (a matched keyword, a threshold note) has no
+    # meaningful score, and the backend sends null rather than a misleading 0.
+    score: float | None
     snippet: str
 
 class StepRecord(BaseModel):
