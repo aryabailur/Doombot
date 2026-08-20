@@ -422,7 +422,19 @@ function dashboardHtml(target: string): string {
 <meta http-equiv="Content-Security-Policy"
       content="default-src 'none'; frame-src ${origin}; style-src 'unsafe-inline';">
 <style>
-  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+  /*
+   * The shell's own background matches the dashboard's --background.
+   *
+   * An iframe paints nothing until it has loaded, so the panel showed VS Code's
+   * default surface for the first moment and then snapped to the dashboard's
+   * near-black -- a flash on every open, and on every reveal after the panel
+   * had been hidden. Matching the colour here makes the load invisible.
+   *
+   * Hardcoded rather than read from a token: this file is the boundary between
+   * two styling systems and cannot import the dashboard's CSS. It is one value,
+   * and it is named here so the next person changing the palette can find it.
+   */
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #131210; }
   iframe { border: 0; width: 100%; height: 100vh; display: block; }
   .fallback { font-family: var(--vscode-font-family); color: var(--vscode-foreground); padding: 16px; }
 </style>

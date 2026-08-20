@@ -86,7 +86,72 @@
           "description": "How often to refresh escalations and health."
         }
       }
-    }
+    },
+    "colors": [
+      {
+        "id": "doombot.critical",
+        "description": "A critical escalation.",
+        "defaults": {
+          "dark": "#f2585d",
+          "light": "#e5484d",
+          "highContrast": "errorForeground"
+        }
+      },
+      {
+        "id": "doombot.high",
+        "description": "A high-severity escalation.",
+        "defaults": {
+          "dark": "#ff8a5c",
+          "light": "#ff6b35",
+          "highContrast": "editorWarning.foreground"
+        }
+      },
+      {
+        "id": "doombot.warning",
+        "description": "A warning-level escalation.",
+        "defaults": {
+          "dark": "#f0b93f",
+          "light": "#e7a928",
+          "highContrast": "editorWarning.foreground"
+        }
+      },
+      {
+        "id": "doombot.info",
+        "description": "An informational escalation.",
+        "defaults": {
+          "dark": "#4d86ff",
+          "light": "#246bfe",
+          "highContrast": "editorInfo.foreground"
+        }
+      },
+      {
+        "id": "doombot.success",
+        "description": "A completed investigation.",
+        "defaults": {
+          "dark": "#25c489",
+          "light": "#19a974",
+          "highContrast": "editorInfo.foreground"
+        }
+      },
+      {
+        "id": "doombot.accent",
+        "description": "Doombot's brand accent.",
+        "defaults": {
+          "dark": "#ff5a36",
+          "light": "#ff5a36",
+          "highContrast": "editorInfo.foreground"
+        }
+      },
+      {
+        "id": "doombot.muted",
+        "description": "An item with nothing to report.",
+        "defaults": {
+          "dark": "#8b8578",
+          "light": "#737373",
+          "highContrast": "descriptionForeground"
+        }
+      }
+    ]
   },
   "scripts": {
     "compile": "tsc -p ./",

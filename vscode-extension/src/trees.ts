@@ -11,10 +11,24 @@ import {
  * Severity to VS Code theme icon.
  *
  * Uses the editor's own theme colours rather than the dashboard's tokens.
- * That is deliberate: a tree item painted with hardcoded hexes would clash
- * with whatever theme the user runs, and DESIGN.md 4 treats "adds a second
- * inconsistent design system" as a spec conflict. The dashboard's palette
- * belongs in the dashboard; native chrome should look native.
+ * Coloured with `doombot.*` ids contributed in package.json, not with
+ * `charts.*` and not with hexes.
+ *
+ * This used to use VS Code's generic `charts.red` / `charts.orange`, reasoning
+ * that hardcoded hexes would clash with whatever theme the user runs and that
+ * DESIGN.md 4 forbids a second inconsistent design system. Both points stand --
+ * a contributed colour answers them rather than overriding them:
+ *
+ * - It is not hardcoded. Each id carries per-mode *defaults* that any theme,
+ *   or the user's `workbench.colorCustomizations`, can override. Native chrome
+ *   still looks native to someone running a theme that cares.
+ * - It removes an inconsistency instead of adding one. The defaults are the
+ *   dashboard's own palette -- light is the Calm Control Room set verbatim,
+ *   dark is the derivation in dashboard/src/tokens.css -- so a critical
+ *   escalation is the same red in the tree, the webview, and the browser. With
+ *   `charts.red` it was three different reds for one severity.
+ *
+ * High contrast defers to VS Code's semantic colours, which are tuned for it.
  *
  * Every item still carries its severity as text in the label, so the icon is
  * never the only signal.
@@ -24,20 +38,23 @@ function severityIcon(severity: string): vscode.ThemeIcon {
     case 'critical':
       return new vscode.ThemeIcon(
         'error',
-        new vscode.ThemeColor('charts.red'),
+        new vscode.ThemeColor('doombot.critical'),
       )
     case 'high':
       return new vscode.ThemeIcon(
         'warning',
-        new vscode.ThemeColor('charts.orange'),
+        new vscode.ThemeColor('doombot.high'),
       )
     case 'warning':
       return new vscode.ThemeIcon(
         'warning',
-        new vscode.ThemeColor('charts.yellow'),
+        new vscode.ThemeColor('doombot.warning'),
       )
     default:
-      return new vscode.ThemeIcon('info', new vscode.ThemeColor('charts.blue'))
+      return new vscode.ThemeIcon(
+        'info',
+        new vscode.ThemeColor('doombot.info'),
+      )
   }
 }
 
@@ -53,13 +70,15 @@ function severityIcon(severity: string): vscode.ThemeIcon {
 function statusIcon(status: string): vscode.ThemeIcon {
   switch (status) {
     case 'done':
-      return new vscode.ThemeIcon('pass')
+      return new vscode.ThemeIcon('pass', new vscode.ThemeColor('doombot.success'))
     case 'error':
-      return new vscode.ThemeIcon('error')
+      return new vscode.ThemeIcon('error', new vscode.ThemeColor('doombot.critical'))
     case 'running':
-      return new vscode.ThemeIcon('sync~spin')
+      // The spinner keeps the accent: it is the one row that is actively
+      // doing something, which is what the brand colour is for.
+      return new vscode.ThemeIcon('sync~spin', new vscode.ThemeColor('doombot.accent'))
     default:
-      return new vscode.ThemeIcon('question')
+      return new vscode.ThemeIcon('question', new vscode.ThemeColor('doombot.muted'))
   }
 }
 
@@ -68,7 +87,10 @@ class MessageItem extends vscode.TreeItem {
   constructor(label: string, tooltip: string) {
     super(label, vscode.TreeItemCollapsibleState.None)
     this.tooltip = tooltip
-    this.iconPath = new vscode.ThemeIcon('circle-slash')
+    this.iconPath = new vscode.ThemeIcon(
+      'circle-slash',
+      new vscode.ThemeColor('doombot.muted'),
+    )
   }
 }
 
