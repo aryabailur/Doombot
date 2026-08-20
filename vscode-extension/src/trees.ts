@@ -182,7 +182,7 @@ export class InvestigationsTreeProvider
       item.command = {
         command: 'doombot.openDashboard',
         title: 'Open in dashboard',
-        arguments: [`/investigations/${investigation.id}`],
+        arguments: [`/investigations/${investigation.investigation_id}`],
       }
       return item
     })
