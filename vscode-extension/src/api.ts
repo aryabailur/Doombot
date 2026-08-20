@@ -21,22 +21,36 @@ export interface Escalation {
   created_at: string
 }
 
+/** Exactly the values `api/schemas.py` emits -- not free-form strings. */
+export type InvestigationStatus = 'running' | 'done' | 'error'
+
 export interface InvestigationSummary {
   // `investigation_id`, not `id` -- api/CLAUDE.md's InvestigationSummary.
   // Caught by tests/test_api_contract.py after this was written wrong.
   investigation_id: string
   repo_name: string
-  kind: string
+  kind: 'issue' | 'pr'
   number: number
   title: string
-  status: string
+  status: InvestigationStatus
   decision: string | null
   created_at: string
+  // Present on every response; omitting it here made the mirror silently
+  // narrower than the contract it claims to mirror.
+  completed_at: string | null
+}
+
+/** Mirrors HealthBreakdown -- four fixed axes, not an open map. */
+export interface HealthBreakdown {
+  security: number
+  staleness: number
+  duplication: number
+  responsiveness: number
 }
 
 export interface HealthResponse {
   score: number
-  breakdown: Record<string, number>
+  breakdown: HealthBreakdown
   history: { ts: string; score: number }[]
 }
 
