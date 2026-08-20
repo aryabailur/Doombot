@@ -92,6 +92,23 @@ export function createInvestigation(
  * The dashboard could select a repository but had no way to make the agent
  * look at it, so an added repo was simply never analysed.
  */
+/**
+ * The full add-a-repository pipeline: connect, embed, select, investigate.
+ *
+ * Narrates each stage over the WebSocket. Prefer this over `scanRepository`
+ * when adding a repository, since embedding is the slowest stage and the one
+ * the user most needs to see happening.
+ */
+export function onboardRepository(
+  owner: string,
+  repo: string,
+  limit = 5,
+): Promise<{ repo_name: string; status: string; limit: number }> {
+  return request(`/api/repos/${owner}/${repo}/onboard?limit=${limit}`, {
+    method: "POST",
+  });
+}
+
 export function scanRepository(
   owner: string,
   repo: string,

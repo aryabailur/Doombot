@@ -1608,7 +1608,13 @@ function CodeGraphExplorer({
 
       <div className="grid min-h-[560px] gap-3 xl:grid-cols-[minmax(0,1fr)_280px]">
         <div
-          className="h-[560px] min-w-0 overflow-hidden rounded-lg border border-border bg-background"
+          className={cn(
+            'h-[560px] min-w-0 overflow-hidden rounded-lg border border-border',
+            // The 3D scene sets its own near-black canvas, so the container
+            // matches it -- otherwise a lighter frame rings the "space" and
+            // breaks the illusion at the edges.
+            dimension === '3d' ? 'bg-[#000005]' : 'bg-background',
+          )}
           ref={canvasRef}
         >
           {filtered.nodes.length === 0 ? (
@@ -1622,9 +1628,25 @@ function CodeGraphExplorer({
             <Suspense fallback={<SkeletonState className="p-4" variant="card" />}>
               {dimension === '3d' ? (
                 <ForceGraph3D
-                  backgroundColor={token('--background')}
+                  // A true black rather than the app's --background (#070a08,
+                  // which carries a green tint). Against black the subsystem
+                  // colours read as lit points in space, which is what makes
+                  // orbiting a dependency graph feel like inspecting an object
+                  // rather than panning a diagram.
+                  backgroundColor="#000005"
                   cooldownTicks={1}
+                  // Orbit controls are the whole appeal of the 3D view, so
+                  // dragging must move the camera, not a node. Node drag stays
+                  // off; showNavInfo tells a first-time user that the canvas is
+                  // interactive at all.
+                  controlType="orbit"
+                  enableNavigationControls
                   enableNodeDrag={false}
+                  showNavInfo
+                  // Depth cues: distant nodes dim and shrink, which is what
+                  // separates a 3D scene from a flat graph drawn on a dark
+                  // rectangle.
+                  nodeResolution={12}
                   graphData={filtered}
                   height={560}
                   linkColor={(raw) =>

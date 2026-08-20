@@ -125,7 +125,12 @@ export interface IndexJobResponse {
 }
 
 export interface WsEnvelope<T = unknown> {
-  type: "step.started" | "step.completed" | "investigation.completed" | "activity";
+  type:
+    | "step.started"
+    | "step.completed"
+    | "investigation.completed"
+    | "activity"
+    | "pipeline";
   data: T;
 }
 

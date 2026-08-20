@@ -18,6 +18,7 @@ import { HealthScoreCard } from '@/components/HealthScoreCard'
 import { HealthTrendChart } from '@/components/HealthTrendChart'
 import { AgentActivityFeed } from '@/components/AgentActivityFeed'
 import { AgentStatusIndicator } from '@/components/AgentStatusIndicator'
+import { OnboardingPipeline } from '@/components/OnboardingPipeline'
 import { RepositorySelector } from '@/components/RepositorySelector'
 import { SeverityBadge, VisibilityBadge } from '@/components/SeverityBadge'
 import { EmptyState } from '@/components/EmptyState'
@@ -44,6 +45,8 @@ const checks: [string, () => string][] = [
   ['RepositorySelector', () => renderToString(<RepositorySelector repos={d.demoRepos} selectedRepo={d.demoRepos[0]} onSelect={()=>{}} onIndexRequested={async()=>{}} />)],
   ['RepositorySelector/add', () => renderToString(<RepositorySelector repos={d.demoRepos} selectedRepo={d.demoRepos[0]} onSelect={()=>{}} onIndexRequested={async()=>{}} onAddRepository={async()=>{}} />)],
   ['RepositorySelector/empty+add', () => renderToString(<RepositorySelector repos={[]} onSelect={()=>{}} onIndexRequested={async()=>{}} onAddRepository={async()=>{}} />)],
+  ['OnboardingPipeline/running', () => renderToString(<OnboardingPipeline repoName="acme/app" currentStep="Searching for duplicate issues" events={[{stage:'connect',status:'done',message:'Connected to acme/app'},{stage:'index',status:'done',message:'Embedded 42 issue(s)',indexed:42},{stage:'scan',status:'done',message:'Selecting issues'},{stage:'investigate',status:'running',message:'Investigating #7',index:2,total:5}]} />)],
+  ['OnboardingPipeline/error', () => renderToString(<OnboardingPipeline repoName="bad/name" events={[{stage:'connect',status:'error',message:'Could not reach bad/name'}]} />)],
   ['EscalationTable', () => renderToString(<EscalationTable rows={d.demoEscalations} filters={{}} onSelect={()=>{}} onFiltersChange={()=>{}} selectedId="esc-1" />)],
   ['EscalationTable/empty', () => renderToString(<EscalationTable rows={[]} filters={{}} onSelect={()=>{}} onFiltersChange={()=>{}} />)],
   ['EscalationTable/filtered-out', () => renderToString(<EscalationTable rows={d.demoEscalations} filters={{severity:['critical'],minConfidence:0.99}} onSelect={()=>{}} onFiltersChange={()=>{}} />)],

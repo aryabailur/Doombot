@@ -32,6 +32,10 @@ import { HealthTrendChart } from '@/components/HealthTrendChart'
 import { InvestigationList } from '@/components/InvestigationList'
 import { InvestigationTrace } from '@/components/InvestigationTrace'
 import { IssueGraph } from '@/components/IssueGraph'
+import {
+  OnboardingPipeline,
+  type PipelineEvent,
+} from '@/components/OnboardingPipeline'
 import { RepositorySelector } from '@/components/RepositorySelector'
 import { SkeletonState } from '@/components/SkeletonState'
 import {
@@ -43,6 +47,7 @@ import {
   indexRepo,
   listEscalations,
   listInvestigations,
+  onboardRepository,
   postFeedback,
   scanRepository,
   WS_URL,
@@ -520,6 +525,9 @@ export function App() {
    * made "Analyse" feel like it hung: the work was streaming past and nobody
    * was listening.
    */
+  /** Pipeline stage events for the add-a-repository flow. */
+  const [pipeline, setPipeline] = useState<PipelineEvent[]>([])
+
   /** Bumped when a run finishes, so every panel refetches at once. */
   const [dataVersion, setDataVersion] = useState(0)
   const [liveActivity, setLiveActivity] = useState<ActivityItem[]>([])
@@ -546,6 +554,15 @@ export function App() {
             ...current,
           ].slice(0, 40),
         )
+        return
+      }
+
+      if (envelope.type === 'pipeline') {
+        const stage = envelope.data as PipelineEvent
+        setPipeline((current) => [...current, stage].slice(-24))
+        if (stage.stage === 'investigate' && stage.status === 'running') {
+          setRunningCount((current) => Math.max(current, stage.total ?? 0))
+        }
         return
       }
 
@@ -643,7 +660,10 @@ export function App() {
                 // exist. Adding a bad name must not look like success.
                 // Awaited so a bad name throws here and shows inline: the
                 // endpoint validates the repository exists before queueing.
-                await scanRepository(nextOwner, nextRepo)
+                // `onboard` rather than `scan` -- it narrates embedding too,
+                // which is the slowest and previously most invisible stage.
+                setPipeline([])
+                await onboardRepository(nextOwner, nextRepo)
 
                 // Indexing feeds duplicate detection and the issue graph.
                 // Deliberately not awaited: embedding a large backlog takes
@@ -699,6 +719,15 @@ export function App() {
           </>
         }
       >
+        {pipeline.length > 0 ? (
+          <OnboardingPipeline
+            className="mb-4"
+            currentStep={liveStep}
+            events={pipeline}
+            onDismiss={() => setPipeline([])}
+            repoName={repoName}
+          />
+        ) : null}
         <Routes>
           <Route element={<Navigate replace to="/overview" />} path="/" />
           <Route

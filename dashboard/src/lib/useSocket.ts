@@ -5,6 +5,8 @@ export type WsEventType =
   | 'step.completed'
   | 'investigation.completed'
   | 'activity'
+  // Add-a-repository stage transitions: connect, index, scan, investigate.
+  | 'pipeline'
 
 export interface WsEnvelope<T = unknown> {
   type: WsEventType
@@ -34,6 +36,7 @@ const eventTypes = new Set<WsEventType>([
   'step.completed',
   'investigation.completed',
   'activity',
+  'pipeline',
 ])
 
 function isWsEnvelope(value: unknown): value is WsEnvelope {

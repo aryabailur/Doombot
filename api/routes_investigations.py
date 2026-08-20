@@ -189,10 +189,104 @@ async def _scan_and_queue(repo_name: str, limit: int) -> None:
         },
     })
 
-    for number in pending:
+    for index, number in enumerate(pending, start=1):
+        # Per-issue progress, so the UI can show "3 of 5" rather than a
+        # spinner that gives no sense of how much is left.
+        await ws.broadcast({
+            "type": "pipeline",
+            "data": {
+                "stage": "investigate",
+                "status": "running",
+                "repo_name": repo_name,
+                "message": f"Investigating #{number}",
+                "index": index,
+                "total": len(pending),
+                "issue_number": number,
+            },
+        })
         await runner.run_investigation(
             runner.new_investigation_id(), repo_name, "issue", number
         )
+
+
+@router.post("/api/repos/{owner}/{repo_slug}/onboard")
+async def onboard_repository(
+    owner: str,
+    repo_slug: str,
+    background: BackgroundTasks,
+    limit: int = Query(default=5, ge=1, le=25),
+) -> dict:
+    """Run the whole add-a-repository pipeline, narrating each stage.
+
+    Adding a repository used to be three silent calls -- validate, embed,
+    investigate -- with nothing on screen between the click and, half a minute
+    later, some numbers. The work was real and completely invisible, which read
+    as either broken or fake.
+
+    This is the same work with the stages announced over the WebSocket as they
+    actually start and finish, so the UI can show what is happening instead of
+    guessing. Every stage event is emitted from the point where that work really
+    begins; none of it is theatre on a timer.
+    """
+    repo_name = f"{owner}/{repo_slug}"
+
+    from mcp_server.github_client import _get_client
+
+    await _stage("connect", "running", repo_name, "Reaching the repository")
+    try:
+        full_name = await asyncio.to_thread(
+            lambda: _get_client().get_repo(repo_name).full_name
+        )
+    except Exception as exc:
+        await _stage("connect", "error", repo_name, f"Could not reach {repo_name}")
+        raise HTTPException(
+            status_code=502, detail=f"could not read repository: {exc}"
+        ) from exc
+
+    await _stage("connect", "done", repo_name, f"Connected to {full_name}")
+    background.add_task(_onboard_pipeline, repo_name, limit)
+    return {"repo_name": repo_name, "status": "onboarding", "limit": limit}
+
+
+async def _stage(
+    stage: str, status: str, repo_name: str, message: str, extra: dict | None = None
+) -> None:
+    """Broadcast one pipeline stage transition."""
+    await ws.broadcast({
+        "type": "pipeline",
+        "data": {
+            "stage": stage,
+            "status": status,
+            "repo_name": repo_name,
+            "message": message,
+            **(extra or {}),
+        },
+    })
+
+
+async def _onboard_pipeline(repo_name: str, limit: int) -> None:
+    """Embed the backlog, then investigate it, narrating both."""
+    from rag.embedder import index_issues
+
+    await _stage("index", "running", repo_name, "Embedding the issue backlog")
+    indexed = 0
+    try:
+        indexed = await asyncio.to_thread(index_issues, repo_name, "all", 200)
+    except Exception as exc:
+        logger.warning("onboard: indexing failed for %s: %s", repo_name, exc)
+        await _stage("index", "error", repo_name, "Could not embed the backlog")
+    else:
+        await _stage(
+            "index",
+            "done",
+            repo_name,
+            f"Embedded {indexed} issue(s) into the vector store",
+            {"indexed": indexed},
+        )
+
+    await _stage("scan", "running", repo_name, "Selecting issues to investigate")
+    await _scan_and_queue(repo_name, limit)
+    await _stage("scan", "done", repo_name, "Investigations complete")
 
 
 @router.get("/api/investigations", response_model=list[InvestigationSummary])
