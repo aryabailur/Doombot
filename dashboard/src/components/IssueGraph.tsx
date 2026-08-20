@@ -633,6 +633,8 @@ function CodeGraphExplorer({
   className?: string
 }) {
   const graphRef = useRef<GraphHandle | null>(null)
+  const canvasRef = useRef<HTMLDivElement | null>(null)
+  const [canvasWidth, setCanvasWidth] = useState(800)
   const [dimension, setDimension] = useState<'2d' | '3d'>('3d')
   const [query, setQuery] = useState('')
   const [selectedNode, setSelectedNode] = useState<CodeGraphNode | null>(null)
@@ -648,6 +650,20 @@ function CodeGraphExplorer({
     update()
     media.addEventListener('change', update)
     return () => media.removeEventListener('change', update)
+  }, [])
+
+  useEffect(() => {
+    if (typeof ResizeObserver === 'undefined' || !canvasRef.current) {
+      return
+    }
+    const observer = new ResizeObserver(([entry]) => {
+      const width = Math.floor(entry.contentRect.width)
+      if (width > 0) {
+        setCanvasWidth(width)
+      }
+    })
+    observer.observe(canvasRef.current)
+    return () => observer.disconnect()
   }, [])
 
   const filtered = useMemo(() => {
@@ -685,7 +701,7 @@ function CodeGraphExplorer({
       reducedMotion ? 0 : 120,
     )
     return () => window.clearTimeout(frame)
-  }, [dimension, filtered.nodes.length, reducedMotion])
+  }, [canvasWidth, dimension, filtered.nodes.length, reducedMotion])
 
   const selectNode = (node: CodeGraphNode) => {
     setSelectedNode(node)
@@ -725,7 +741,10 @@ function CodeGraphExplorer({
       ctx.fill()
 
       if (scale > 0.65 || node.impact_status !== 'unaffected') {
-        const fontSize = Math.min(13, Math.max(8, 10 / scale))
+        // Canvas text is transformed with the graph. Inverse scaling keeps a
+        // symbol label close to 11 screen pixels even when a search result is
+        // zoomed in, instead of expanding it to headline size.
+        const fontSize = Math.min(80, Math.max(2, 11 / scale))
         ctx.font = `${fontSize}px ui-monospace, SFMono-Regular, monospace`
         ctx.textAlign = 'center'
         ctx.textBaseline = 'top'
@@ -829,7 +848,10 @@ function CodeGraphExplorer({
       </label>
 
       <div className="grid min-h-[560px] gap-3 xl:grid-cols-[minmax(0,1fr)_280px]">
-        <div className="h-[560px] min-w-0 overflow-hidden rounded-lg border border-border bg-background">
+        <div
+          className="h-[560px] min-w-0 overflow-hidden rounded-lg border border-border bg-background"
+          ref={canvasRef}
+        >
           {filtered.nodes.length === 0 ? (
             <EmptyState
               className="h-full"
@@ -870,9 +892,13 @@ function CodeGraphExplorer({
                   nodeVal={(raw) =>
                     3 + Math.min(10, (raw as CodeGraphNode).hub_score * 14)
                   }
+                  onEngineStop={() =>
+                    graphRef.current?.zoomToFit(reducedMotion ? 0 : 400, 56)
+                  }
                   onLinkClick={(raw) => selectLink(raw as MutableCodeLink)}
                   onNodeClick={(raw) => selectNode(raw as CodeGraphNode)}
                   ref={graphRef as unknown as React.ComponentProps<typeof ForceGraph3D>['ref']}
+                  width={canvasWidth}
                 />
               ) : (
                 <ForceGraph2D
@@ -897,9 +923,13 @@ function CodeGraphExplorer({
                     const node = raw as CodeGraphNode
                     return `${node.symbol_name} — ${node.file_path}:${node.start_line} — ${impactLabel(node)}`
                   }}
+                  onEngineStop={() =>
+                    graphRef.current?.zoomToFit(reducedMotion ? 0 : 400, 56)
+                  }
                   onLinkClick={(raw) => selectLink(raw as MutableCodeLink)}
                   onNodeClick={(raw) => selectNode(raw as CodeGraphNode)}
                   ref={graphRef as unknown as React.ComponentProps<typeof ForceGraph2D>['ref']}
+                  width={canvasWidth}
                 />
               )}
             </Suspense>
@@ -917,8 +947,8 @@ function CodeGraphExplorer({
       </div>
 
       <p className="text-xs text-text-muted">
-        {graph.stats.attribution}. Impact follows dependencies in both directions
-        to depth two; high-degree hubs are suppressed to avoid noisy false alarms.
+        {graph.stats.attribution} Impact follows dependencies in both directions to
+        depth two; high-degree hubs are suppressed to avoid noisy false alarms.
       </p>
 
       <table className="sr-only">
