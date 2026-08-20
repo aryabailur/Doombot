@@ -4,9 +4,10 @@ from agents.state import GraphState
 from mcp_server.tool_names import GET_PR_DETAILS, GET_PR_FILES
 import json
 import asyncio
+import sys
 def fetcher_node(state:GraphState):
     server_params=StdioServerParameters(
-    command="python",
+    command=sys.executable,
     args=["-m", "mcp_server.server"]
      )
     async def fetch():

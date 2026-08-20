@@ -20,3 +20,4 @@ dist/
 # compiled extension output (tsc)
 vscode-extension/out/
 *.vsix
+.DS_Store

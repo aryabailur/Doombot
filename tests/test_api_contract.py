@@ -362,3 +362,28 @@ def test_websocket_envelope_and_step_shape():
 
         if event["type"].startswith("step."):
             assert_shape(event["data"], STEP_RECORD, f"event[{index}].data")
+
+
+def test_cors_allows_the_extension_service_worker():
+    """The Lens's MV3 worker is a chrome-extension:// origin, not github.com.
+
+    Its fetches carry chrome-extension://<id>, where the id is assigned per
+    install. Without a matching allow-origin header Chrome reports a network
+    failure, and the panel shows "backend unreachable" even though the API
+    answered 200 -- which is exactly what happened before allow_origin_regex
+    was added.
+    """
+    origin = "chrome-extension://" + "a" * 32
+    request = urllib.request.Request(
+        f"{BASE_URL}/api/health", headers={"Origin": origin}
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            allowed = response.headers.get("access-control-allow-origin")
+    except (urllib.error.URLError, OSError):
+        pytest.skip(f"API not running at {BASE_URL}")
+
+    assert allowed == origin, (
+        "the service worker's origin is not allowed; the Agent tab will report "
+        "the backend as unreachable"
+    )
