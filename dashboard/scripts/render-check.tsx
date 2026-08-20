@@ -50,6 +50,7 @@ const checks: [string, () => string][] = [
   ['AppShell', () => renderToString(<MemoryRouter><AppShell>content</AppShell></MemoryRouter>)],
   ['IssueGraph', () => renderToString(<IssueGraph nodes={d.demoGraphNodes} links={d.demoGraphLinks} />)],
   ['IssueGraph/empty', () => renderToString(<IssueGraph nodes={[]} links={[]} />)],
+  ['IssueGraph/code', () => renderToString(<IssueGraph codeGraph={m.mockCodeGraph} />)],
   ['InvestigationList', () => renderToString(<InvestigationList investigations={m.mockInvestigations} onSelect={()=>{}} />)],
   ['InvestigationList/loading', () => renderToString(<InvestigationList investigations={null} onSelect={()=>{}} />)],
   ['InvestigationList/error', () => renderToString(<InvestigationList investigations={[]} error="boom" onSelect={()=>{}} />)],
