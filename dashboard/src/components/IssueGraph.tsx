@@ -362,47 +362,69 @@ function IssueRelationshipGraph({
     // the link forces to shape them.
     const gravity = (alpha: number) => {
       const all = simNodes.current
+
       // Chronological ordering, so a duplicate chain reads left-to-right as
-      // "original -> later report" instead of as an undirected blob.
-      //
-      // This is the "flow" the scatter was missing. `similar` and `duplicate`
+      // "original -> later report" instead of as an undirected blob. This is
+      // the flow the plain scatter was missing: `similar` and `duplicate`
       // edges are symmetric, so nothing in the data implied a direction and
       // the layout had none to show. Issue number is a real ordering that is
-      // always present, and nudging each node toward an x slot derived from
-      // it gives the graph a consistent reading direction -- older issues to
-      // the left, newer to the right -- without inventing a relationship.
+      // always present.
       //
-      // Strength 0.15, chosen by replaying this simulation across 20 random
-      // starting layouts rather than by eye. At 0.035 the ordering only held
-      // 3/20 times -- charge repulsion simply overwhelmed it, which is why an
-      // earlier attempt at this looked no less random. At 0.25 the ordering
-      // is stable but the flow overpowers the link force and a 0.99 duplicate
-      // no longer sits closer than a 0.69 near-miss, losing the more
-      // important signal. 0.15 is the value where both hold: 20/20 correct
-      // left-to-right ordering and 20/20 duplicates-closer-than-related.
-      let lowest = Infinity
-      let highest = -Infinity
-      for (const node of all) {
-        if (node.number < lowest) lowest = node.number
-        if (node.number > highest) highest = node.number
-      }
-      const span = Math.max(1, highest - lowest)
+      // Rank is computed over the connected nodes only, and by position in
+      // that list rather than by raw issue number. Both matter. Ranking over
+      // every node let unconnected issues consume slots, which pushed the
+      // cluster off-centre -- with issues 2..6 and only #3, #4, #6 connected,
+      // their slots were -80, 0 and +160 for a centroid of +27, visibly
+      // right-of-centre. Using rank rather than the number itself also keeps
+      // the spacing even when issue numbers are sparse (#3, #97, #412 read as
+      // three evenly spaced columns, not two nodes crushed against one edge).
+      const ordered = all
+        .filter((node) => connectedIds.has(node.id))
+        .sort((left, right) => left.number - right.number)
+      const lastIndex = Math.max(1, ordered.length - 1)
+      const slotOf = new Map<string, number>()
+      ordered.forEach((node, index) => {
+        slotOf.set(node.id, (index / lastIndex - 0.5) * 300)
+      })
 
-      for (const node of all) {
-        const pull = (connectedIds.has(node.id) ? 0.02 : 0.08) * alpha
-        if (node.x !== undefined) {
-          node.vx = (node.vx ?? 0) - node.x * pull
+      // Unconnected issues are parked in a column to the left of the graph
+      // rather than left to drift. They have no relationships, so no position
+      // among the clusters would mean anything -- but scattering them into the
+      // corners made them dominate the viewport, which is what made the whole
+      // graph look arbitrary. A tidy "no relationships" gutter reads as a
+      // deliberate category instead of as noise.
+      const loners = all
+        .filter((node) => !connectedIds.has(node.id))
+        .sort((left, right) => left.number - right.number)
+      const lonerX = -260
+      const lonerSpacing = 46
+      const lonerTop = -((loners.length - 1) * lonerSpacing) / 2
 
-          if (connectedIds.has(node.id)) {
-            // Spread across a fixed width so the drift does not grow with
-            // issue count; only the relative order matters.
-            const slot = ((node.number - lowest) / span - 0.5) * 320
-            node.vx -= (node.x - slot) * 0.15 * alpha
-          }
+      loners.forEach((node, index) => {
+        if (node.x === undefined || node.y === undefined) {
+          return
         }
-        if (node.y !== undefined) {
-          node.vy = (node.vy ?? 0) - node.y * pull
+        const targetY = lonerTop + index * lonerSpacing
+        node.vx = (node.vx ?? 0) - (node.x - lonerX) * 0.12 * alpha
+        node.vy = (node.vy ?? 0) - (node.y - targetY) * 0.12 * alpha
+      })
+
+      for (const node of ordered) {
+        if (node.x === undefined || node.y === undefined) {
+          continue
         }
+        // Gentle pull to the vertical centre line; the link forces own the
+        // vertical arrangement so clusters can still fan out.
+        node.vy = (node.vy ?? 0) - node.y * 0.025 * alpha
+
+        const slot = slotOf.get(node.id) ?? 0
+        // Strength 0.15, chosen by replaying this simulation across 20 random
+        // starting layouts rather than by eye. At 0.035 the ordering held only
+        // 3/20 times -- charge repulsion simply overwhelmed it. At 0.25 the
+        // ordering is stable but the flow overpowers the link force and a 0.99
+        // duplicate no longer sits closer than a 0.69 near-miss, losing the
+        // more important signal.
+        node.vx = (node.vx ?? 0) - (node.x - slot) * 0.15 * alpha
       }
     }
     gravity.initialize = (assigned: SimNode[]) => {
@@ -624,13 +646,19 @@ function IssueRelationshipGraph({
           linkColor={(raw) => {
             const link = raw as GraphLink
             const dim =
-              neighbourhood &&
-              !neighbourhood.edges.has(issueLinkKey(link))
+              neighbourhood && !neighbourhood.edges.has(issueLinkKey(link))
             if (dim) {
-              return token('--surface-2')
+              return token('--border')
             }
+            if (neighbourhood) {
+              return token('--accent-bright')
+            }
+            // `--border` (#24332a) is a 1px-divider colour: on the graph's
+            // near-black canvas it was effectively invisible, so the
+            // relationships the graph exists to show could not be seen. The
+            // code graph was already fixed for this; the issue graph was not.
             return token(
-              link.kind === 'reference' ? '--accent-bright' : '--border',
+              link.kind === 'reference' ? '--accent-bright' : '--text-muted',
             )
           }}
           linkDirectionalArrowLength={(link) =>
@@ -710,10 +738,12 @@ function IssueRelationshipGraph({
         </p>
       ) : (
         <p className="text-xs text-text-muted">
-          Hover an issue to focus its neighbourhood. Older issues sit left,
-          newer right; closer together means more similar. Solid lines are
-          likely duplicates, dashed are related, arrows are explicit
-          references. Click a connection to see why two issues are linked.
+          Hover an issue to light its connections. Related issues run oldest to
+          newest left to right, and sit closer together the more similar they
+          are; issues with no relationships are parked in the left-hand column.
+          Solid lines are likely duplicates, dashed are related, arrows are
+          explicit references. Click a connection to see why two issues are
+          linked.
         </p>
       )}
 
