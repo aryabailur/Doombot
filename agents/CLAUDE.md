@@ -583,3 +583,52 @@ last thing merged.
 - [ ] `issue_app = graph.compile()` wired exactly per §4.7
 - [ ] All verification commands in §9 run clean
 - [ ] `agents/orchestrator.py` and its four existing node files unchanged
+
+---
+
+## 12. Stretch feature: `resolver` (F16)
+
+**File:** `agents/triage/resolver.py`. **Node name:** `resolver`.
+**Reads:** `repo_name`, `issue_number`, `issue_metadata`. **Writes:** `resolution`.
+**Position:** between `duplicate_detector` and `security_scanner` — it needs the
+similarity search, and must never pre-empt a security escalation.
+
+Searches *closed* issues for one that was actually solved, reads how, and
+drafts a reply citing it.
+
+### Three gates, all required
+
+1. Similarity to a closed issue >= `RESOLUTION_THRESHOLD` (0.75). Lower than
+   the 0.85 duplicate bar on purpose: a resolution does not require the reports
+   be the same, only that the old fix plausibly applies.
+2. That issue has a **substantive** resolution. A closed issue is not a
+   resolved issue — plenty are closed as stale or as duplicates with no
+   explanation. A closing comment under 40 characters carries no reusable fix.
+3. The model's self-check confirms the draft addresses **this** issue rather
+   than restating the old one. A draft that only describes the prior issue is
+   exactly the copy-paste behaviour this feature exists to avoid.
+
+Any failure writes `resolution: None` and normal triage continues. **Silence
+is the correct output most of the time** — an ungrounded answer on a public
+issue costs the maintainer trust as well as time.
+
+### The write is gated twice
+
+Posting is **off by default**. `DESIGN.md` §12 makes "publish public comment"
+approval-required, and this is the riskiest write in the product.
+
+| `DOOMBOT_AUTO_RESOLVE` | `DEMO_MODE` | Posts? |
+|---|---|---|
+| unset | any | No — draft held for approval |
+| `1` | unset/`0` | Only if confidence >= 0.80 |
+| `1` | `1` | No — `DEMO_MODE` always wins |
+
+The gate lives in `decider`, not here, because `decider` is the only node
+permitted GitHub side effects. Keeping the decision to write and the write
+itself in one place is what makes it auditable.
+
+### Decision priority
+
+`decider` ranks `resolve` **below** security and **above** `close_duplicate`.
+Telling an author how to fix their problem beats pointing them at another open
+thread — but neither beats a possible vulnerability.

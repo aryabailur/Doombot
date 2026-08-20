@@ -51,3 +51,18 @@ table, or health cards. Per `CLAUDE.md`, the answer to "should this be a
 VS Code-native screen?" is almost always "open the dashboard webview".
 
 This is P2 and first on the cut list — it must never delay the dashboard.
+
+---
+
+## Stretch features
+
+`Doombot: Open Issue Graph` opens the dashboard's `/graph` route in the
+webview (F15).
+
+Deliberately *not* a native VS Code graph. `react-force-graph` needs a canvas,
+and `docs/DESIGN.md` §4 treats reimplementing dashboard UI natively as a spec
+conflict — so this follows the same rule as every other rich view here: open
+the dashboard.
+
+F16 (auto-resolution) has no extension surface yet. When a resolution is
+posted it will appear in the escalations tree like any other agent action.

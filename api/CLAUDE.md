@@ -406,3 +406,66 @@ wscat -c ws://localhost:8000/ws
 - [ ] Every curl command above returns 200 with the documented shape
 - [ ] `wscat` connection receives at least one event during a live investigation run
 - [ ] Any change to `schemas.py` after freeze followed the 4-step breaking-change process
+
+---
+
+## 14. Stretch endpoints (F15, F16)
+
+### `GET /api/repos/{owner}/{repo}/graph`
+
+Returns the issue relationship graph for the force-directed view.
+
+```python
+class GraphNode(BaseModel):
+    id: str                # "issue-412"
+    number: int
+    title: str
+    category: Literal["security", "duplicate", "stale", "resolved", "open"]
+    state: str
+    labels: list[str]
+    engagement: int        # reactions + comments
+    escalated: bool
+
+class GraphLink(BaseModel):
+    source: str            # node id
+    target: str
+    kind: Literal["duplicate", "similar", "reference", "metadata"]
+    score: float
+    why: str               # human-readable reason, rendered on click
+
+class GraphResponse(BaseModel):
+    nodes: list[GraphNode]
+    links: list[GraphLink]
+    stats: dict
+```
+
+**The computation already exists** — `rag.graph.build_graph(repo_name,
+security_numbers)` returns exactly this shape. The route is a thin wrapper:
+read the escalated issue numbers from SQLite for `security_numbers`, call it,
+return it. Do not recompute relationships in the API layer.
+
+Returns empty lists rather than 404 for an unindexed repo, so the dashboard
+renders an empty state rather than an error.
+
+### `resolution` on `InvestigationDetail`
+
+F16 adds one nullable field to the detail response:
+
+```python
+class Resolution(BaseModel):
+    source_issue: int
+    source_title: str
+    similarity: float
+    reply: str
+    confidence: float
+    reason: str
+    auto_post: bool        # was it eligible to post without approval
+    posted: bool
+
+# InvestigationDetail gains:
+    resolution: Resolution | None
+```
+
+Persist it alongside the decision. When `auto_post` is false and `posted` is
+false, the dashboard shows the draft with an approve action -- that is the
+approval gate, and it is the default path.

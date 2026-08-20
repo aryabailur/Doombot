@@ -5,6 +5,7 @@ import {
   BrainCircuit,
   PanelLeftClose,
   PanelLeftOpen,
+  Network,
   Search,
   TriangleAlert,
   type LucideIcon,
@@ -28,6 +29,7 @@ const navItems: NavItem[] = [
   { to: '/overview', label: 'Overview', icon: Activity },
   { to: '/escalations', label: 'Escalations', icon: TriangleAlert },
   { to: '/investigations', label: 'Investigations', icon: Search },
+  { to: '/graph', label: 'Graph', icon: Network },
   { to: '/health', label: 'Health', icon: Activity },
 ]
 

@@ -432,3 +432,39 @@ the same file).
 - [ ] `retrieve(query, repo_name)` signature and return type unchanged —
       `agents/reviewer.py` still works against it untouched
 - [ ] All verification commands in §10 run clean against a real indexed repo
+
+---
+
+## 13. Stretch feature: issue relationship graph (F15)
+
+**File:** `rag/graph.py`. Entry point `build_graph(repo_name, security_numbers)`,
+returning `{"nodes": [...], "links": [...], "stats": {...}}` — react-force-graph's
+expected shape, so the 2D and 3D components are a one-line swap.
+
+**No new ML pipeline.** It reads the embeddings the `{repo}-issues` collection
+already holds for duplicate detection, so this is a view over data the triage
+graph produced. Chroma omits embeddings from `.get()` by default; they must be
+requested explicitly via `include=["metadatas", "documents", "embeddings"]`.
+
+### Three edge signals
+
+| Kind | Source | Notes |
+|---|---|---|
+| `duplicate` / `similar` | Cosine between issue embeddings | Same thresholds as `find_duplicates`, so the graph and the detector never disagree |
+| `reference` | `#123` in an issue body | Upgrades an existing similarity edge rather than stacking a second line — an explicit mention is stronger evidence than a score |
+| `metadata` | Shared label | |
+
+### Two rules that make it readable rather than a hairball
+
+- **Edges below 0.65 are dropped entirely.** With 50+ issues every pair has
+  *some* similarity, and drawing all of them communicates nothing.
+- **A label held by more than a third of the repo is skipped.** `bug` would
+  connect everything to everything and destroy the clustering the graph exists
+  to show.
+
+Every edge carries a `why` string (`"0.92 cosine similarity"`) rendered when a
+maintainer clicks it. An edge you cannot interrogate is decoration, not
+evidence.
+
+Returns empty lists rather than raising when the repo is unindexed, so the UI
+shows an empty state instead of an error.

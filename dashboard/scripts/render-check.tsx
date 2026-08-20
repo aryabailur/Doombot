@@ -24,6 +24,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { ErrorState } from '@/components/ErrorState'
 import { SkeletonState } from '@/components/SkeletonState'
 import { AppShell } from '@/components/AppShell'
+import { IssueGraph } from '@/components/IssueGraph'
 import * as d from '@/demo/demoData'
 
 const checks: [string, () => string][] = [
@@ -45,6 +46,8 @@ const checks: [string, () => string][] = [
   ['EscalationPreview', () => renderToString(<EscalationPreview escalation={d.demoEscalations[0]} onApprove={async()=>{}} onReject={async()=>{}} onCorrect={async()=>{}} onOpenInvestigation={()=>{}} />)],
   ['EscalationPreview/null', () => renderToString(<EscalationPreview escalation={null} onApprove={async()=>{}} onReject={async()=>{}} onCorrect={async()=>{}} onOpenInvestigation={()=>{}} />)],
   ['AppShell', () => renderToString(<MemoryRouter><AppShell>content</AppShell></MemoryRouter>)],
+  ['IssueGraph', () => renderToString(<IssueGraph nodes={d.demoGraphNodes} links={d.demoGraphLinks} />)],
+  ['IssueGraph/empty', () => renderToString(<IssueGraph nodes={[]} links={[]} />)],
 ]
 
 let failed = 0
