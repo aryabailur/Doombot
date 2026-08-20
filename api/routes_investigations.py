@@ -15,10 +15,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 
-from api import runner
+from api import runner, ws
 from api.schemas import (
     CreateInvestigationRequest,
     Escalation,
@@ -28,6 +29,8 @@ from api.schemas import (
     StepRecord,
 )
 from memory import repo
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -109,55 +112,87 @@ async def scan_repository(
     background: BackgroundTasks,
     limit: int = Query(default=5, ge=1, le=25),
 ) -> dict:
-    """Investigate a repository's open issues.
+    """Start investigating a repository's open issues. Returns immediately.
 
     The dashboard could select a repository but had no way to make the agent
-    look at it: `POST /api/investigations` needs a specific issue number, and
-    nothing in the UI knew which numbers existed. Autonomous monitoring covers
-    this for repositories listed in DOOMBOT_MONITOR_REPOS, but that needs an
-    env edit and a restart -- so an arbitrary repository could be added and
-    then never analysed, which reads as the agent silently ignoring it.
+    look at it: POST /api/investigations needs a specific issue number, and
+    nothing in the UI knew which numbers existed.
 
-    Bounded by `limit`, and open issues only. A full sweep of a large backlog
-    would be dozens of model calls and hit Groq's rate limit long before it
-    finished, so this deliberately investigates the most recent few rather
-    than everything.
+    Listing the issues is deliberately *not* awaited here. It is a GitHub round
+    trip, and under a secondary rate limit PyGithub backs off for minutes --
+    measured at 85s for a four-issue repository, all of it with the Analyse
+    button spinning. The caller now gets an answer in milliseconds and watches
+    the run arrive over the WebSocket, which is where the progress belongs.
+
+    Only the repository's existence is checked synchronously, because that is
+    one cheap request and it is the difference between "started" and a typo
+    that would otherwise fail silently in the background.
     """
     repo_name = f"{owner}/{repo_slug}"
 
+    from mcp_server.github_client import _get_client
+
+    try:
+        await asyncio.to_thread(lambda: _get_client().get_repo(repo_name).full_name)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail=f"could not read repository: {exc}"
+        ) from exc
+
+    background.add_task(_scan_and_queue, repo_name, limit)
+    return {"repo_name": repo_name, "status": "scanning", "limit": limit}
+
+
+async def _scan_and_queue(repo_name: str, limit: int) -> None:
+    """Fetch open issues and run the graph on each, one at a time.
+
+    Sequential rather than concurrent: each investigation is several Groq calls,
+    and firing five at once is the fastest way to hit a model rate limit and
+    fail all of them. One at a time also makes the live trace readable, which is
+    the point of streaming it.
+    """
     from mcp_server.github_client import get_issues
 
     try:
         issues = await asyncio.to_thread(get_issues, repo_name, "open", limit)
     except Exception as exc:
-        # A bad name or a private repo must fail loudly here: returning an
-        # empty success would look identical to "nothing needed attention".
-        raise HTTPException(
-            status_code=502, detail=f"could not read issues: {exc}"
-        ) from exc
+        logger.warning("scan: could not list issues for %s: %s", repo_name, exc)
+        await ws.broadcast({
+            "type": "activity",
+            "data": {"message": f"Could not read issues for {repo_name}"},
+        })
+        return
 
     already = {
         row["number"]
         for row in repo.list_investigations()
         if row["repo_name"] == repo_name
     }
+    pending = [
+        issue["number"]
+        for issue in issues
+        if issue.get("number") is not None and issue["number"] not in already
+    ]
 
-    queued: list[int] = []
-    for issue in issues:
-        number = issue.get("number")
-        if number is None or number in already:
-            continue
-        investigation_id = runner.new_investigation_id()
-        background.add_task(
-            runner.run_investigation, investigation_id, repo_name, "issue", number
+    # `queued` is structured so the UI can count in-flight work without
+    # parsing the message string.
+    await ws.broadcast({
+        "type": "activity",
+        "data": {
+            "repo_name": repo_name,
+            "queued": len(pending),
+            "message": (
+                f"Scanning {repo_name}: {len(pending)} issue(s) to investigate"
+                if pending
+                else f"{repo_name}: nothing new to investigate"
+            ),
+        },
+    })
+
+    for number in pending:
+        await runner.run_investigation(
+            runner.new_investigation_id(), repo_name, "issue", number
         )
-        queued.append(number)
-
-    return {
-        "repo_name": repo_name,
-        "queued": queued,
-        "skipped_already_investigated": len(issues) - len(queued),
-    }
 
 
 @router.get("/api/investigations", response_model=list[InvestigationSummary])

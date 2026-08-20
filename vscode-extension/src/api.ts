@@ -52,6 +52,16 @@ export interface HealthResponse {
   score: number
   breakdown: HealthBreakdown
   history: { ts: string; score: number }[]
+  /**
+   * False when the repository has no issues to score.
+   *
+   * Three of the four sub-scores return 100 for an empty backlog, so without
+   * this the status bar reported a confident "Doombot 100" for a repository
+   * nothing had ever been read from. Defaulted for older API builds that do
+   * not send it.
+   */
+  measured?: boolean
+  issue_count?: number
 }
 
 function config() {
@@ -94,12 +104,38 @@ async function getJson<T>(path: string): Promise<T | null> {
   }
 }
 
+/**
+ * Scoped to `doombot.repository` when it is set.
+ *
+ * The API grew a ?repo_name filter and the dashboard uses it, so an unscoped
+ * tree here would list another repository's work beside the health score of
+ * the configured one -- two panels disagreeing about which repo is on screen.
+ * Unset means unscoped, which is the right default for a global queue.
+ */
+function repoQuery(): string {
+  const repo = repository()
+  return repo.includes('/') ? `?repo_name=${encodeURIComponent(repo)}` : ''
+}
+
 export function getEscalations(): Promise<Escalation[] | null> {
-  return getJson<Escalation[]>('/api/escalations')
+  return getJson<Escalation[]>(`/api/escalations${repoQuery()}`)
 }
 
 export function getInvestigations(): Promise<InvestigationSummary[] | null> {
-  return getJson<InvestigationSummary[]>('/api/investigations')
+  return getJson<InvestigationSummary[]>(`/api/investigations${repoQuery()}`)
+}
+
+/** Investigate a repository's open issues (the dashboard's Analyse action). */
+export async function scanRepository(repo: string, limit = 5): Promise<boolean> {
+  try {
+    const response = await fetch(
+      `${apiBaseUrl()}/api/repos/${repo}/scan?limit=${limit}`,
+      { method: 'POST' },
+    )
+    return response.ok
+  } catch {
+    return false
+  }
 }
 
 export function getHealth(repo: string): Promise<HealthResponse | null> {

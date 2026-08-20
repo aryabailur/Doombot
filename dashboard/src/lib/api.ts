@@ -96,7 +96,7 @@ export function scanRepository(
   owner: string,
   repo: string,
   limit = 5,
-): Promise<{ repo_name: string; queued: number[]; skipped_already_investigated: number }> {
+): Promise<{ repo_name: string; status: string; limit: number }> {
   return request(`/api/repos/${owner}/${repo}/scan?limit=${limit}`, {
     method: "POST",
   });

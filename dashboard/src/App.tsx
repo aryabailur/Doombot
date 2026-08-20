@@ -1,4 +1,6 @@
 import { useCallback, useState } from 'react'
+
+import { Loader2 } from 'lucide-react'
 import {
   BrowserRouter,
   Navigate,
@@ -45,7 +47,12 @@ import {
   scanRepository,
   WS_URL,
 } from '@/lib/api'
-import type { Escalation, HealthResponse, RepoSummary } from '@/lib/types'
+import type {
+  Escalation,
+  HealthResponse,
+  RepoSummary,
+  StepRecord,
+} from '@/lib/types'
 import { useApiData } from '@/lib/useApiData'
 import { useSocket, type WsEnvelope } from '@/lib/useSocket'
 
@@ -129,18 +136,31 @@ function toComponents(health: HealthResponse): HealthComponentScore[] {
   }))
 }
 
-function OverviewPage({ repoName }: { repoName: string }) {
+function OverviewPage({
+  repoName,
+  dataVersion,
+  liveActivity,
+  liveStep,
+}: {
+  repoName: string
+  dataVersion: number
+  liveActivity: ActivityItem[]
+  liveStep: string | null
+}) {
   const [owner, repo] = splitRepo(repoName)
   const health = useApiData<HealthResponse>(() => getRepoHealth(owner, repo), {
     pollMs: 60_000,
+    refreshKey: dataVersion,
   })
   // Scoped to the selected repository. Unscoped, every panel showed another
   // repository's work, which read as "it did not analyse my repo".
   const escalations = useApiData(() => listEscalations(repoName), {
     pollMs: 20_000,
+    refreshKey: dataVersion,
   })
   const investigations = useApiData(() => listInvestigations(repoName), {
     pollMs: 20_000,
+    refreshKey: dataVersion,
   })
 
   const rows = (escalations.data ?? []).map(toRow)
@@ -159,6 +179,10 @@ function OverviewPage({ repoName }: { repoName: string }) {
           ? 'action_taken'
           : 'investigation',
   }))
+
+  // Live socket events first, then history. The live ones are what make the
+  // agent visibly working rather than apparently idle.
+  const mergedActivity = [...liveActivity, ...activity].slice(0, 40)
 
   if (health.error && !health.data) {
     return <ErrorState kind={health.error} onRetry={health.reload} />
@@ -195,7 +219,18 @@ function OverviewPage({ repoName }: { repoName: string }) {
           </div>
         </section>
 
-        <AgentActivityFeed items={activity} maxItems={6} />
+        {/* A visible "working now" line. Without it a run that takes half a
+            minute looks like nothing is happening at all. */}
+        {liveStep ? (
+          <p className="flex items-center gap-2 rounded-lg border border-accent-muted bg-surface-2 px-3 py-2 text-xs text-text-secondary">
+            <Loader2
+              aria-hidden="true"
+              className="size-3.5 shrink-0 text-accent motion-safe:animate-spin"
+            />
+            <span className="truncate">{liveStep}</span>
+          </p>
+        ) : null}
+        <AgentActivityFeed items={mergedActivity} maxItems={8} />
       </div>
 
       <HealthTrendChart
@@ -208,7 +243,7 @@ function OverviewPage({ repoName }: { repoName: string }) {
   )
 }
 
-function EscalationsPage({ repoName }: { repoName: string }) {
+function EscalationsPage({ repoName, dataVersion }: { repoName: string; dataVersion: number }) {
   const navigate = useNavigate()
   const [filters, setFilters] = useState<EscalationFilters>({})
   const [selectedId, setSelectedId] = useState<string | undefined>()
@@ -218,6 +253,7 @@ function EscalationsPage({ repoName }: { repoName: string }) {
 
   const escalations = useApiData(() => listEscalations(repoName), {
     pollMs: 20_000,
+    refreshKey: dataVersion,
   })
 
   const rows = (escalations.data ?? []).map((item) => {
@@ -270,11 +306,12 @@ function EscalationsPage({ repoName }: { repoName: string }) {
   )
 }
 
-function InvestigationsPage({ repoName }: { repoName: string }) {
+function InvestigationsPage({ repoName, dataVersion }: { repoName: string; dataVersion: number }) {
   const navigate = useNavigate()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const investigations = useApiData(() => listInvestigations(repoName), {
     pollMs: 15_000,
+    refreshKey: dataVersion,
   })
 
   return (
@@ -473,9 +510,90 @@ export function App() {
   // detail page opens its own for step events -- the hub broadcasts to every
   // client, so a second connection costs nothing and keeps the pages
   // independent.
+  /**
+   * Live agent activity, straight off the socket.
+   *
+   * This handler used to be empty: the shell held a WebSocket open purely to
+   * light the connection indicator and threw every event away. The agent would
+   * work for half a minute -- fetching, comparing, scoring, deciding -- and the
+   * screen showed nothing until a 20-second poll happened to land. That is what
+   * made "Analyse" feel like it hung: the work was streaming past and nobody
+   * was listening.
+   */
+  /** Bumped when a run finishes, so every panel refetches at once. */
+  const [dataVersion, setDataVersion] = useState(0)
+  const [liveActivity, setLiveActivity] = useState<ActivityItem[]>([])
+  const [liveStep, setLiveStep] = useState<string | null>(null)
+  const [runningCount, setRunningCount] = useState(0)
+
   const { connectionState, lastEventAt } = useSocket({
     url: WS_URL,
-    onEvent: () => {},
+    onEvent: useCallback((envelope: WsEnvelope) => {
+      if (envelope.type === 'step.started' || envelope.type === 'step.completed') {
+        const step = envelope.data as StepRecord
+        if (envelope.type === 'step.started') {
+          setLiveStep(step.title || step.name)
+          return
+        }
+        setLiveActivity((current) =>
+          [
+            {
+              id: `${step.investigation_id}-${step.step_id}`,
+              message: `${step.title || step.name} — #${step.name}`,
+              timestamp: step.ended_at || new Date().toISOString(),
+              kind: 'investigation' as const,
+            },
+            ...current,
+          ].slice(0, 40),
+        )
+        return
+      }
+
+      if (envelope.type === 'activity') {
+        const info = envelope.data as { message?: string; queued?: number }
+        if (typeof info.queued === 'number') {
+          setRunningCount((current) => current + (info.queued ?? 0))
+        }
+        if (info.message) {
+          const text = info.message
+          setLiveActivity((current) =>
+            [
+              {
+                id: `act-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                message: text,
+                timestamp: new Date().toISOString(),
+                kind: 'investigation' as const,
+              },
+              ...current,
+            ].slice(0, 40),
+          )
+        }
+        return
+      }
+
+      if (envelope.type === 'investigation.completed') {
+        const done = envelope.data as { decision?: string }
+        setLiveStep(null)
+        setRunningCount((current) => Math.max(0, current - 1))
+        setLiveActivity((current) =>
+          [
+            {
+              id: `done-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+              message: `finished — ${(done.decision ?? 'done').replace(/_/g, ' ')}`,
+              timestamp: new Date().toISOString(),
+              kind:
+                done.decision === 'escalate'
+                  ? ('escalation' as const)
+                  : ('action_taken' as const),
+            },
+            ...current,
+          ].slice(0, 40),
+        )
+        // Refresh immediately rather than waiting for the next poll: the run
+        // just changed the very data every panel is showing.
+        setDataVersion((current) => current + 1)
+      }
+    }, []),
   })
 
   return (
@@ -500,14 +618,10 @@ export function App() {
                 try {
                   const [scanOwner, scanRepo] = splitRepo(target.repo_name)
                   const result = await scanRepository(scanOwner, scanRepo)
-                  // Say what happened. "Nothing queued" is a real and
-                  // common outcome -- every open issue already investigated --
-                  // and silence there is indistinguishable from a failure.
-                  setScanNote(
-                    result.queued.length > 0
-                      ? `Investigating ${result.queued.length} issue${result.queued.length === 1 ? '' : 's'} in ${result.repo_name}.`
-                      : `Nothing new to investigate in ${result.repo_name}.`,
-                  )
+                  // The scan is queued, not finished -- how many issues it
+                  // found arrives over the socket. "Scanning" is honest;
+                  // claiming a count we do not have yet would not be.
+                  setScanNote(`Scanning ${result.repo_name}…`)
                 } catch (cause) {
                   setScanNote(
                     cause instanceof Error
@@ -527,7 +641,9 @@ export function App() {
                 // fire-and-forget (202-style, work happens in a thread), so
                 // awaiting it succeeds even for a repository that does not
                 // exist. Adding a bad name must not look like success.
-                const result = await scanRepository(nextOwner, nextRepo)
+                // Awaited so a bad name throws here and shows inline: the
+                // endpoint validates the repository exists before queueing.
+                await scanRepository(nextOwner, nextRepo)
 
                 // Indexing feeds duplicate detection and the issue graph.
                 // Deliberately not awaited: embedding a large backlog takes
@@ -539,11 +655,7 @@ export function App() {
                   current.includes(name) ? current : [...current, name],
                 )
                 setRepoName(name)
-                setScanNote(
-                  result.queued.length > 0
-                    ? `Added ${name} — investigating ${result.queued.length} issue${result.queued.length === 1 ? '' : 's'}.`
-                    : `Added ${name} — no open issues to investigate.`,
-                )
+                setScanNote(`Added ${name} — scanning for issues…`)
                 repos.reload()
               }}
               onSelect={(next) => setRepoName(next.repo_name)}
@@ -559,6 +671,15 @@ export function App() {
                 (item) => item.repo_name === repoName,
               )}
             />
+            {runningCount > 0 ? (
+              <span className="flex items-center gap-1.5 rounded-md border border-accent-muted bg-surface-2 px-2 py-1 text-xs text-text-secondary">
+                <Loader2
+                  aria-hidden="true"
+                  className="size-3.5 text-accent motion-safe:animate-spin"
+                />
+                {runningCount} investigating
+              </span>
+            ) : null}
             {scanNote ? (
               <button
                 className="max-w-md truncate rounded-md border border-border bg-surface-2 px-2 py-1 text-left text-xs text-text-secondary"
@@ -581,15 +702,22 @@ export function App() {
         <Routes>
           <Route element={<Navigate replace to="/overview" />} path="/" />
           <Route
-            element={<OverviewPage repoName={repoName} />}
+            element={
+              <OverviewPage
+                dataVersion={dataVersion}
+                liveActivity={liveActivity}
+                liveStep={liveStep}
+                repoName={repoName}
+              />
+            }
             path="/overview"
           />
           <Route
-            element={<EscalationsPage repoName={repoName} />}
+            element={<EscalationsPage dataVersion={dataVersion} repoName={repoName} />}
             path="/escalations"
           />
           <Route
-            element={<InvestigationsPage repoName={repoName} />}
+            element={<InvestigationsPage dataVersion={dataVersion} repoName={repoName} />}
             path="/investigations"
           />
           <Route

@@ -6,6 +6,7 @@ import {
   getHealth,
   pollSeconds,
   repository,
+  scanRepository,
 } from './api'
 import { EscalationsTreeProvider, InvestigationsTreeProvider } from './trees'
 
@@ -57,6 +58,7 @@ export function activate(context: vscode.ExtensionContext): void {
       openDashboard(context, '/graph'),
     ),
     vscode.commands.registerCommand('doombot.triggerScan', triggerScan),
+    vscode.commands.registerCommand('doombot.scanRepository', scanWholeRepo),
     vscode.commands.registerCommand('doombot.refreshEscalations', () =>
       refreshAll(),
     ),
@@ -116,7 +118,11 @@ async function refreshAll(): Promise<void> {
   statusBarItem.text = `$(shield) Doombot ${healthText} · ${pending} open`
   statusBarItem.tooltip = new vscode.MarkdownString(
     repo
-      ? `**${repo}**\n\nHealth: ${healthText}/100\n\n${pending} open escalation${pending === 1 ? '' : 's'}`
+      ? `**${repo}**
+
+${health && health.measured === false ? 'No issues to score yet' : `Health: ${healthText}/100`}
+
+${pending} open escalation${pending === 1 ? '' : 's'}`
       : 'Set `doombot.repository` to see a health score.',
   )
 
@@ -140,6 +146,36 @@ async function refreshAll(): Promise<void> {
       })
   }
   lastCriticalCount = critical
+}
+
+/**
+ * Investigates the repository's recent open issues -- the dashboard's Analyse.
+ *
+ * `triggerScan` asks for one issue number, which assumes the user already
+ * knows which numbers exist. This is the common case: look at whatever needs
+ * looking at. Returns as soon as the scan is queued; progress arrives in the
+ * trees on the next poll.
+ */
+async function scanWholeRepo(): Promise<void> {
+  const repo = repository()
+  if (!repo.includes('/')) {
+    void vscode.window.showWarningMessage(
+      'Set `doombot.repository` to owner/repo first.',
+    )
+    return
+  }
+
+  const started = await scanRepository(repo)
+  if (started) {
+    void vscode.window.showInformationMessage(
+      `Doombot is scanning ${repo} for issues to investigate.`,
+    )
+    await refreshAll()
+  } else {
+    void vscode.window.showErrorMessage(
+      `Could not scan ${repo}. Is the API running, and is the name correct?`,
+    )
+  }
 }
 
 /** Prompts for an issue number and starts an investigation (F01). */
