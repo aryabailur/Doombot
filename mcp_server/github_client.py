@@ -204,7 +204,22 @@ def get_issues(repo_name: str, state: str = "open", limit: int = 100) -> list[di
             )
             if len(results) >= limit:
                 break
-        return results
+        # Zero results is ambiguous, so it is never trusted on its own.
+        #
+        # GitHub's search index lags behind the API for freshly created
+        # repositories and issues, so an empty result set means either "this
+        # repository genuinely has no issues" or "the index has not caught up
+        # yet". Those are very different, and reporting the second as the
+        # first tells the user their repository is empty when it is not --
+        # after which the dashboard truthfully reports nothing to analyse and
+        # no health to score. Falling through to the listing path costs one
+        # request in the genuinely-empty case and removes the ambiguity.
+        if results:
+            return results
+        logger.info(
+            "get_issues: search returned 0 for %s, confirming via listing",
+            repo_name,
+        )
     except Exception:
         # Search is rate-limited separately (30/min) and can fail on its own,
         # so the listing path stays as a fallback rather than being deleted.
