@@ -12,6 +12,7 @@ import type {
   ActivityPageApi,
   SuggestedActionApi,
   ApproveActionResponseApi,
+  RepoGraphResponse,
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
@@ -49,6 +50,10 @@ export function indexRepo(owner: string, repo: string): Promise<IndexJobResponse
 
 export function getRepoHealth(owner: string, repo: string): Promise<HealthResponseApi> {
   return request(`/api/repos/${owner}/${repo}/health`);
+}
+
+export function getRepoGraph(owner: string, repo: string): Promise<RepoGraphResponse> {
+  return request(`/api/repos/${owner}/${repo}/graph`);
 }
 
 export function createInvestigation(

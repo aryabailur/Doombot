@@ -9,6 +9,12 @@ export interface EvidenceRef {
   kind: "issue" | "pr" | "decision" | "commit";
   similarity?: number;
   relevance?: number;
+  /** Real evidence.score from the backend, regardless of kind — unlike
+   * similarity/relevance (only set for RAG-style issue/pr/duplicate
+   * matches), this is populated for every real evidence type (security,
+   * impact, etc) so overall evidence strength can be computed honestly.
+   * Optional because seed/demo fixtures predate this field. */
+  score?: number;
 }
 
 export interface AgentStep {

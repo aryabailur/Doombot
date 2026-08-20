@@ -21,16 +21,25 @@ const KIND_META: Record<ActivityEvent["kind"], { icon: typeof Search; color: str
 
 export function ActivityStream({ events, live = true }: ActivityStreamProps) {
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col">
       {events.map((event, i) => {
         const { icon: Icon, color } = KIND_META[event.kind];
         const isLatest = i === 0;
+        const isLast = i === events.length - 1;
         return (
-          <div key={i} className="flex items-start gap-3 animate-rise-in">
-            <div className="relative mt-0.5 flex-none">
-              <Icon className={`h-4 w-4 ${color}`} strokeWidth={2.25} />
+          <div
+            key={i}
+            className="animate-stagger-in relative flex items-start gap-3 pb-4 last:pb-0"
+            style={{ "--stagger-i": Math.min(i, 10) } as React.CSSProperties}
+          >
+            {!isLast && <div className="absolute top-5 left-2 h-full w-px bg-border" />}
+            <div className="relative z-10 mt-0.5 flex h-4 w-4 flex-none items-center justify-center">
+              <Icon className={`h-4 w-4 ${color} transition-transform duration-200 ${isLatest && live ? "scale-110" : ""}`} strokeWidth={2.25} />
               {isLatest && live && (
-                <span className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 animate-pulse-dot rounded-full bg-accent" />
+                <span className="absolute -top-1 -right-1 flex h-2 w-2">
+                  <span className="absolute inset-0 animate-agent-pulse-ring rounded-full bg-accent" />
+                  <span className="relative h-2 w-2 animate-pulse-dot rounded-full bg-accent" />
+                </span>
               )}
             </div>
             <div className="min-w-0">

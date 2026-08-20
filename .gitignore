@@ -16,3 +16,7 @@ node_modules/
 dist/
 .vite/
 *.vsix
+
+# Reference-only external repo pulled in for the CodeGraphContext graph
+# integration — not part of RepoGuardian, never committed.
+/CodeGraphContext-main/

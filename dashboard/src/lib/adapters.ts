@@ -49,6 +49,7 @@ function toEvidenceRef(ev: Evidence): EvidenceRef {
     kind,
     similarity: ev.type === "duplicate" || ev.type === "issue" ? ev.score : undefined,
     relevance: ev.type === "pr" ? ev.score : undefined,
+    score: ev.score,
   };
 }
 
@@ -98,7 +99,18 @@ export function summaryToInvestigation(summary: InvestigationSummary): Investiga
 export function detailToInvestigation(detail: InvestigationDetail): Investigation {
   const decision = apiDecisionToUi(detail.decision);
   const lastStep = detail.steps[detail.steps.length - 1];
-  const allEvidence = detail.steps.flatMap((s) => s.evidence).map(toEvidenceRef);
+  const rawEvidence = detail.steps.flatMap((s) => s.evidence);
+  const allEvidence = rawEvidence.map(toEvidenceRef);
+
+  // Real, structured tags: the security_scanner step's evidence entries are
+  // {type: "security", ref: "<matched keyword>"} — an honest label-like tag
+  // sourced from actual keyword-match evidence, not a fabricated category.
+  // (GitHub's own issue labels aren't exposed as a structured StepRecord
+  // field today — only inside a Python-repr output_summary string — so they
+  // aren't parsed here rather than risk a fragile ad-hoc parse.)
+  const labels = Array.from(
+    new Set(rawEvidence.filter((e) => e.type === "security" && e.ref).map((e) => e.ref))
+  );
 
   return {
     id: detail.investigation_id,
@@ -107,7 +119,7 @@ export function detailToInvestigation(detail: InvestigationDetail): Investigatio
     kind: detail.kind,
     author: "",
     body: lastStep?.input_summary ?? "",
-    labels: [],
+    labels,
     createdAt: detail.created_at,
     decision,
     confidence: detail.confidence ?? 0,

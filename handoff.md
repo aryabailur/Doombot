@@ -1,35 +1,7 @@
 # Handoff — RepoGuardian / Doombot
 
-**Branch:** `feat/a-core-api-and-dashboard` (not merged to `main` — see git status below)
-**Session date:** 2026-08-20
-
-> **⚠️ Addendum — read this first.** Everything below §1-§5 describes the
-> state of the repo **as of the end of my session**. Since then, the
-> working tree has kept changing — `memory/db.py`, `api/schemas.py`,
-> `mcp_server/client.py`, `mcp_server/github_client.py`, `mcp_server/
-> tools.py`, and `memory/repo.py` all show further edits I did not make
-> and have not reviewed line-by-line. From a `git diff --stat` skim, this
-> looks like real, substantial follow-on work — not noise:
-> - a `suggested_actions` table + migration (`memory/db.py`) and an
->   Approval Center page/nav entry — looks like the "approve labels below
->   the auto-apply threshold" flow this doc's Approval Action Center
->   component always assumed but never had a backend for
-> - `tool_calls_json` tracking on `chain_steps` — a new per-step field
->   (`StepRecord.tool_calls`) not in my original schema
-> - `HealthForecast`, `MemoryQueryResult`/`MemoryQueryResponse`,
->   `ActivityEvent` schemas added to `api/schemas.py` — this directly
->   matches what §5.2/§5.3 below called out as missing (real Project
->   Memory retrieval endpoint, persistent Agent Activity log), so
->   whoever picked this up seems to be working the same punch list
-> - `find_recent_open_investigation` + investigation dedup logic in
->   `api/routes_investigations.py` — guards against the double-card bug
->   visible in one of my own test screenshots earlier in this session
->
-> **Do not treat §2-§5 as the current file contents** — treat them as
-> the last state I personally verified. Before acting on anything below,
-> re-run `git status` / `git diff` and re-verify the servers still behave
-> as described, since real hands (or another agent) have been in this
-> code since I wrote it.
+**Branch:** `mayank` (pushed to `origin/mayank`; based on `feat/a-core-api-and-dashboard`, itself unmerged to `main` — see git status below)
+**Session date:** 2026-08-21 (this update) — supersedes the 2026-08-20 handoff, which is preserved below as §6-§10 for historical/root-cause context.
 
 ---
 
@@ -39,242 +11,274 @@ Make **Doombot** (backend agent name) / **RepoGuardian** (dashboard product name
 a GitHub issue-triage agent — actually work end-to-end against **any real
 external repository**, with every stage of analysis (fetch → duplicate
 detection → security scan → impact score → labeling → decision) visibly
-shown and correct on a live dashboard. Not a demo with seeded/fixture data —
-real GitHub reads and writes, real RAG-based duplicate detection, real
-decisions, all driven from a repo picker the user can point at anything.
+shown and correct on a live dashboard, gated by human approval before any
+GitHub write above/below the auto-apply confidence threshold. Real GitHub
+reads/writes, real RAG-based duplicate detection, real Groq-driven decisions,
+all driven from a repo picker — not fixture data.
 
-Two earlier phases got us here:
+This session's focus, on top of the prior session's real-pipeline work: (a)
+audit the built product against the actual PS-04 hackathon spec and fix the
+highest-risk gaps, (b) push the result to a new branch, (c) add a second
+round of UI polish/animation, (d) verify live against a large, previously
+untouched external repo (`microsoft/vscode`) to answer "does this work for
+*any* repo, not just the ones already tested."
+
+---
+
+## 2. Current state — what works right now (verified this session)
+
+Both servers were running for live verification:
+- API: `uvicorn api.main:app --port 8000`
+- Dashboard: `npm run dev` in `dashboard/` (port 5173)
+
+**Verified live, end-to-end, against `microsoft/vscode` — a large, popular,
+entirely fresh repo never touched in any prior session or test:**
+- Full 6-step investigation pipeline (fetch → duplicate → security →
+  impact → label → decide) completed successfully on a real open issue,
+  all steps `status: done`, real `tool_calls` populated, dashboard rendered
+  it correctly (timeline, evidence graph, decision badge, zero console
+  errors) — confirmed via live Playwright screenshot.
+- `GET /api/repos/microsoft/vscode/health` returns real computed data
+  (score 92.5), not a fixture.
+- Indexing (`POST /api/repos/microsoft/vscode/index`) completed
+  successfully — took 1-2+ minutes (known characteristic, see §2.1) but
+  produced a real Chroma collection with `doc count: 100`.
+- Project Memory search (`GET /api/repos/microsoft/vscode/memory?q=terminal`)
+  returned real ranked semantic results after indexing completed.
+
+**Conclusion: the pipeline is not special-cased to any particular repo** —
+it works generically against any `owner/repo` the user points it at,
+including ones several orders of magnitude larger/busier than anything
+tested in the prior session (`octocat/Hello-World`, `aryabailur/Doombot`,
+`expressjs/express`).
+
+### 2.1 One real bug found and fixed during this verification
+
+**Negative relevance scores** in Project Memory search results (e.g.
+`-13%`, `-14.3%`, `-15.5%` shown as "relevance") on repos where a query has
+generally low similarity to the whole indexed corpus. Traced directly with
+`rag.retriever.retrieve_with_scores()` — confirmed the raw negative values
+come straight from LangChain/Chroma's own
+`similarity_search_with_relevance_scores()`, not from any Doombot code (a
+known upstream quirk: scores aren't strictly bounded to [0,1] in that
+scenario). **Fixed** in `api/routes_repos.py`'s `query_memory()` only, by
+clamping for display:
+```python
+score = max(0.0, min(1.0, raw_score))
+```
+Deliberately **not** touched in `rag/retriever.py`'s shared scoring
+function — other consumers (`find_duplicates`) rely on its raw threshold
+behavior and clamping there could silently change duplicate-detection
+sensitivity. Verified fixed live: restarted API server, re-queried,
+scores came back `0.176, 0.0, 0.0, 0.0, 0.0` — no negatives.
+
+### 2.2 One known, non-bug limitation (worth remembering, not fixing blind)
+
+Indexing a very large repo (vscode-scale) takes 1-2+ minutes. Root cause
+(already documented in §9 below from the prior session): PyGithub does a
+separate API call per issue for lazily-fetched attributes, multiplied by up
+to 100 issues per `index_issues()` call. Confirmed again this session by
+running `index_issues()` directly in Python — it exceeded a 60s foreground
+timeout and had to move to background, then completed successfully. Not a
+regression, not a hang — just slow at this repo size. If this becomes a
+demo-day risk (judges waiting on a spinner), the fix would be GraphQL bulk
+fetch instead of REST-per-issue, not attempted this session.
+
+---
+
+## 3. Files actively edited this session (all uncommitted as of writing, on `mayank`)
+
+```
+ M api/routes_repos.py                        (+8/-1)   — score clamping in query_memory()
+ M dashboard/src/components/ActivityStream.tsx (+19/-6)  — stagger-in + live pulse polish
+ M dashboard/src/components/DecisionBadge.tsx  (+18/-8)  — badge alert/check/bob/spin-in animations
+ M dashboard/src/components/EvidenceChip.tsx   (+10/-4)  — chip entrance polish
+ M dashboard/src/components/HealthChart.tsx    (+38/-6)  — path-draw/area-fade/point animations, per-repo replay
+ M dashboard/src/components/Sidebar.tsx        (+18/-8)  — nav indicator slide, hover translate, index-button check-pop
+ M dashboard/src/index.css                     (+100)    — new keyframes: badge-alert/check/bob/spin-in, path-draw,
+                                                             area-fade, chart-point, skeleton-block/pulse,
+                                                             nav-indicator, check-pop, tilt-on-hover, text-shimmer
+ M dashboard/src/pages/IssueDetail.tsx         (+12/-3)  — skeleton-block loading state (replacing plain text)
+ M dashboard/src/pages/WeeklyBrief.tsx         (+35/-9)  — animated brief reveal, shimmer title, staggered lines
+```
+
+All animation additions respect the pre-existing global
+`@media (prefers-reduced-motion: reduce)` rule in `index.css` — nothing new
+bypasses it.
+
+**Not edited this session, but load-bearing from the prior session** (see
+§7-§10 below): `agents/triage/labeler.py` (approval-required security
+labels), `api/routes_investigations.py` (dedup + suggested-actions),
+`memory/db.py` / `memory/repo.py` (suggested_actions table,
+tool_calls_json), `dashboard/src/lib/adapters.ts` (status-mapping fix),
+various page-level decision-badge double-mapping fixes.
+
+---
+
+## 4. Everything tried that failed this session
+
+1. **SVG nesting attempt for `ConfidenceRing`** — tried nesting
+   `<AnimatedNumber>` (renders a `<span>`) inside an SVG `<text>` element.
+   SVG text requires `<tspan>`/text nodes, not arbitrary HTML — caught
+   before shipping, self-corrected by rewriting `ConfidenceRing.tsx` to do
+   the percentage count-up inline via `requestAnimationFrame` alongside the
+   arc sweep, instead of reusing the `<AnimatedNumber>` component.
+2. **CSS mask Firefox incompatibility** — `.animate-live-border::after`
+   initially used only `-webkit-mask`/`-webkit-mask-composite`. Fixed by
+   adding the standard (unprefixed) `mask`/`mask-composite` properties
+   alongside.
+3. **Template-literal bug in a `MetricCard`-style className** — wrote a
+   `${...}` interpolation inside a plain (non-backtick) string by mistake.
+   Caught immediately, fixed by wrapping in backticks properly.
+4. **Server serving with a stale GitHub token** — after the user pasted a
+   new token into `.env` (twice, in chat — see §5, security note), the
+   already-running `uvicorn` process kept using the old token because env
+   vars are only read at process start. Diagnosed by checking token
+   validity independently (new token had full 5000/5000 quota) and tailing
+   `/tmp/api_server.log`, confirming server-side staleness. Fixed with
+   `lsof -ti:8000 | xargs kill -9` + relaunch.
+5. **Push rejected on `mayank` branch — 100MB file limit** —
+   `chroma_db/chroma.sqlite3` had grown to 103MB across commit history
+   during testing. `git rm --cached` alone was insufficient (blob still in
+   earlier commits' trees). User chose full history rewrite over other
+   options; used `git filter-branch --index-filter` to strip the blob from
+   every commit on the (brand-new, unpushed at the time) `mayank` branch,
+   cleaned up `.git/refs/original/`, expired reflog, ran
+   `git gc --prune=now --aggressive`. Verified the local on-disk file was
+   untouched and no >50MB blobs remained in history before the push
+   succeeded.
+
+---
+
+## 5. Security note (must persist across sessions)
+
+The user pasted a **real GitHub personal access token into chat, twice**,
+in this session's earlier portion:
+`github_pat_[REDACTED — revoked; original recorded only in local session notes]`
+
+I flagged both times that any token typed into chat should be treated as
+compromised and told the user to revoke it at
+`github.com/settings/personal-access-tokens` (or `/tokens` for classic
+tokens), and to paste future tokens directly into `.env` only, never into
+chat. **I did not independently confirm the token was actually revoked** —
+this should be re-checked with the user if credential issues come up again.
+Also: an even older stale token was mentioned once as possibly still
+sitting in `.env` from before either pasted token — never explicitly
+confirmed cleaned up.
+
+---
+
+## 6. Next step (priority order)
+
+1. **Confirm the pasted token(s) were actually revoked.** Not verified by
+   me — ask the user directly, or check the token's status via the GitHub
+   API if a current token is available (`GET /rate_limit` with the old
+   token should now 401).
+2. **Decide on the `mayank` branch → PR.** It's pushed to
+   `origin/mayank` but no PR has been opened (I asked "open it now, or
+   leave it for review first?" earlier and the user never answered — do
+   not open one unassisted). Given `feat/a-core-api-and-dashboard` (its
+   base) is itself unmerged and stale relative to `origin/main`, merging
+   will need real reconciliation — see §10 item 1 below, still unresolved.
+3. **Run `npx tsc --noEmit` and a fresh Playwright pass** on the current
+   uncommitted animation changes before committing — they were
+   individually verified live during the session but not re-verified as a
+   combined diff.
+4. **If demo-day timing is a concern**, address the vscode-scale indexing
+   slowness (§2.2) — likely a GraphQL bulk-fetch rewrite of
+   `rag/embedder.py`'s issue indexing, not attempted this session.
+5. Everything in §10 (Next step, prior session) that's still unresolved:
+   real Project Memory retrieval endpoint (**done this session** — see
+   `GET /api/repos/{owner}/{repo}/memory`, §2 above), persistent Agent
+   Activity log (**done** — see `GET /api/activity`), health-score
+   staleness sub-score (**still a hardcoded 70.0 placeholder**, honest but
+   unimplemented).
+
+---
+
+---
+
+# Prior session (2026-08-20) — preserved for context
+
+Everything from §7 onward is the handoff as written at the end of the prior
+session, before the branch was renamed/pushed to `mayank` and before this
+session's animation/verification work. Kept verbatim because the root-cause
+narratives (§9) are still the best record of *why* several non-obvious
+fixes exist — don't re-break these while touching the same files.
+
+## 7. The goal (as originally stated)
+
+Make Doombot/RepoGuardian actually work end-to-end against any real
+external repository, with every analysis stage visibly shown and correct
+on a live dashboard. Not a demo with seeded/fixture data — real GitHub
+reads and writes, real RAG-based duplicate detection, real decisions, all
+driven from a repo picker the user can point at anything.
+
+Two earlier phases got there:
 1. Backend contract build (FastAPI + SQLite + LangGraph triage pipeline),
    verified against mocked GitHub calls.
-2. A full dashboard rebuild (neo-brutalist, then re-skinned to match a
-   "Calm Control Room" design spec) — originally on `seed.ts` fixture data,
-   then rewired to call the real API.
+2. A full dashboard rebuild (neo-brutalist, then re-skinned to a "Calm
+   Control Room" design spec) — originally on `seed.ts` fixture data, then
+   rewired to call the real API.
 
-This session's focus: plug in **real GitHub + Groq credentials** and make
-the whole pipeline actually correct against real, external, popular repos
-(not just the two tiny sandbox repos used earlier).
+## 8. State at end of prior session
 
----
+**Verified working, live, with real credentials, against real external
+repos:** `octocat/Hello-World` (read-only, no write access, expected),
+`aryabailur/Doombot` (real writes: labels applied, duplicate comment
+posted), `expressjs/express` (real CVE-referenced issue #7391 correctly
+escalated at 85% confidence, no false positives).
 
-## 2. Current state — what works right now
+**Dashboard pages confirmed showing real data:** Command Center, Attention
+Queue, Issue Detail, Project Health, Decisions, Security Signals,
+Duplicate Intelligence, Weekly Brief, Command Palette. Project Memory and
+Agent Activity were, at that time, honest placeholders deriving from
+investigation history rather than dedicated endpoints — **both have since
+been given real endpoints** (`/api/repos/{owner}/{repo}/memory`,
+`/api/activity`), confirmed working in §2 above.
 
-Both servers are running as of end of session:
-- API: `uvicorn api.main:app --port 8000` (background, pid visible via `lsof -ti:8000`)
-- Dashboard: `npm run dev` in `dashboard/` (background, port 5173)
+## 9. Root causes found and fixed (prior session — still valid, don't re-break)
 
-**Verified working, live, with real credentials, against real external repos:**
-- `octocat/Hello-World` — full pipeline, read-only (no write access, expected)
-- `aryabailur/Doombot` (repo owner's own repo) — full pipeline including
-  **real writes**: `security-sensitive` and `duplicate` labels actually
-  applied on GitHub, a real duplicate-detection comment actually posted
-- `expressjs/express` — a real, busy, external repo with a genuine
-  CVE-referenced security issue (#7391), correctly detected as `escalate`
-  at 85% confidence with `#cve`/`#dos`/`#fails open` evidence, no false
-  positives
+1. **Cross-event-loop deadlock + GitHub rate-limit exhaustion**, both real,
+   both fixed independently — the deadlock guard in `call_tool_sync` is a
+   legitimate defensive fix even though rate-limit exhaustion (compounded
+   by PyGithub's default 10-retry backoff hanging 5-8 min per call) was the
+   actual cause of the hang that surfaced it.
+2. **Security scanner missed CVE-referenced issue** — keyword list lacked
+   `cve`, `dos`, `denial of service`, `fails open`. Fixed by expansion.
+3. **False positive**: `"rce"` substring-matched inside "enfo**rce**ment".
+   Fixed with `\b` word-boundary regex — caused a regression (`"auth"` no
+   longer matched "authenticate", `"api key"` didn't match `API_KEY`),
+   fixed by adding explicit keywords and normalizing underscores/hyphens to
+   spaces before matching.
+4. **Health scores flat at neutral 70** — route param named `repo_slug`
+   didn't bind to the `{owner}/{repo}` path template, so `repo_name`
+   silently became just `owner`. Fixed by renaming the param and aliasing
+   `from memory import repo` to `db` to avoid shadowing.
+5. **Cross-repo data leak** — escalation/investigation endpoints returned
+   data for every repo regardless of picker selection. Fixed with a real
+   `repo_name` query param used consistently.
+6. **`UNIQUE constraint failed: chain_steps.step_id`** — `chain_step`
+   legitimately writes the same `step_id` twice (running, then done);
+   `insert_step` was a plain INSERT. Fixed with `INSERT ... ON CONFLICT DO
+   UPDATE`.
+7. **Repo picker accepted a raw GitHub URL** as a literal repo_name,
+   matching nothing server-side. Fixed with a normalizer accepting 4 input
+   forms, rejecting anything else with a visible inline error.
+8. **Orphaned "running" investigations** after a server restart mid-run —
+   structural gap, not one-off. Fixed with a startup reconciliation pass
+   (`reconcile_orphaned_investigations()`).
+9. **`mcp>=1.28` resolved to `mcp==2.0.0`**, breaking `FastMCP` imports.
+   Pinned to `mcp>=1.28,<2.0`.
 
-**Dashboard pages confirmed showing real (non-fixture) data:** Command
-Center, Attention Queue, Issue Detail (with live evidence graph + agent
-run timeline), Project Health, Decisions, Security Signals, Duplicate
-Intelligence, Weekly Brief, Command Palette (⌘G, grounded Q&A over real
-investigations). Project Memory and Agent Activity are partially honest
-placeholders (see §5 — no dedicated backend endpoint for raw
-retrieval-browsing or persistent activity log yet; they derive from
-investigation history instead).
+## 10. Next step (as originally written — see §6 above for current priority)
 
-**Credentials:** real `GITHUB_TOKEN` and `GROQ_API_KEY` are in `.env`
-(gitignored, confirmed not tracked). `GROQ_MODEL=openai/gpt-oss-120b`.
-
----
-
-## 3. Files actively edited this session
-
-Everything below is **uncommitted** on top of `a983e9b` (the last commit,
-titled "Phase 0 stabilization, frozen API contract, memory layer, and
-dashboard rebuild"). Run `git status` / `git diff` to see the exact diff.
-
-**Backend — bug fixes to already-built code:**
-- `agents/triage/security_scanner.py` — keyword list expanded + fixed
-  (word-boundary regex, underscore/hyphen normalization) — see §4 for the
-  two real bugs this fixed
-- `api/routes_investigations.py` — fixed a background-task deadlock; added
-  `repo_name` query filter to `/api/investigations` and `/api/escalations`
-- `api/routes_repos.py` — fixed a path-param naming bug that silently
-  broke `repo_name` construction in `/health` and `/brief` endpoints
-  (`memory.repo` module now aliased `db` to avoid shadowing the `repo`
-  path param); split file-indexing and issue-indexing into independent
-  background tasks
-- `api/main.py` — added `repo.reconcile_orphaned_investigations()` at
-  startup
-- `memory/repo.py` — `insert_step` changed from INSERT to UPSERT (fixed a
-  UNIQUE-constraint crash); added `reconcile_orphaned_investigations()`
-  and `update_investigation_title()`
-- `mcp_server/client.py` — added a same-loop deadlock guard in
-  `call_tool_sync`
-- `mcp_server/github_client.py` — disabled PyGithub's default 10-retry
-  backoff (`GithubRetry(total=0)`) so rate-limit hits fail in ~0.3s instead
-  of hanging for minutes
-- `rag/embedder.py`, `rag/retriever.py` — added `hnsw:space: cosine` to
-  both Chroma collections so relevance scores are properly bounded 0-1
-  (previously mis-scaled/negative under default L2 space)
-- `requirements.txt` — pinned `mcp>=1.28,<2.0` (mcp 2.0.0 has a different
-  API surface, broke `FastMCP` imports)
-
-**Dashboard — full rewrite, most files new:**
-- `dashboard/src/lib/RepoContext.tsx` (new) — repo picker state,
-  localStorage-persisted
-- `dashboard/src/lib/adapters.ts` (new) — maps real API shapes onto the
-  UI's `Investigation`/`AgentStep`/`EvidenceRef` types; `
-  loadInvestigationsWithDetail()` is the main helper every page now uses
-- `dashboard/src/lib/api.ts`, `types.ts`, `useSocket.ts` — rewritten for
-  the real backend contract (`api/schemas.py` mirror) + repo-scoped query
-  params
-- `dashboard/src/components/Sidebar.tsx` (new) — repo picker with a URL
-  normalizer (accepts `owner/repo`, `https://github.com/owner/repo`,
-  `.git` suffix, `git@github.com:...` — all forms)
-- `dashboard/src/components/{AttentionCard,DecisionBadge,ConfidenceRing,
-  EvidenceChip,EvidenceGraph,AgentRunTimeline,ActivityStream,MetricCard,
-  InsightCard,HealthChart,CommandPalette,Layout,TopBar,ActionApproval}.tsx`
-  (new) — the full component set for the current design
-- `dashboard/src/pages/*.tsx` (new dir) — one file per screen
-  (CommandCenter, AttentionQueue, IssueDetail, ProjectHealth, Decisions,
-  WeeklyBrief, DuplicateIntelligence, SecuritySignals, ProjectMemory,
-  AgentActivity)
-- Old neo-brutalist-era components/pages were **deleted**
-  (`AgentActivityFeed`, `AgentStatusIndicator`, `AppShell`,
-  `ConfidenceIndicator`, `EscalationTable`, `EvidenceCard`,
-  `HealthScoreCard`, `HealthTrendChart`, `InvestigationList`,
-  `InvestigationStep`, `InvestigationTrace`, `SeverityBadge`,
-  `EmptyState`, `ErrorState`, `SkeletonState`, `lib/mocks.ts`,
-  `lib/format.ts`) — superseded by the current page-based structure
-- `dashboard/src/lib/seed.ts` (new, untracked) — still exists as the
-  **type source** for `Investigation`/`Decision`/`AgentStep`/`EvidenceRef`
-  shapes (adapters.ts converts real API responses into these shapes so
-  components didn't need rewriting) — it is NOT used for data anymore,
-  only for its TypeScript type definitions
-
-**Not part of this codebase, sitting in the working tree, untouched:**
-`DESIGN (1).md` (untracked, not mine, left alone), `dashboard/public/`
-(pre-existing favicon/icon assets, not from this session's scaffold).
-
----
-
-## 4. Everything tried that failed (and the real root causes found)
-
-These are worth reading before touching the affected files again — each
-looked like a different kind of bug before the real cause was found.
-
-1. **"expressjs/express investigation hangs forever at step 1."**
-   First hypothesis: cross-event-loop deadlock in `call_tool_sync`
-   (`asyncio.run()` in a background thread scheduling back onto the main
-   loop via `run_coroutine_threadsafe`, then blocking on `future.result()`
-   from *inside* that same main loop — a genuine self-deadlock, reproduced
-   independently in isolation). Fixed the immediate cause
-   (`background_tasks.add_task(_run_investigation, ...)` instead of
-   wrapping in `asyncio.run` in a thread) — **but the hang persisted.**
-   Second hypothesis, confirmed correct: **GitHub rate limit exhaustion**
-   (`X-RateLimit-Remaining: 0`), compounded by PyGithub's default
-   `GithubRetry(total=10)` silently backing off for 5-8 minutes per call
-   instead of raising — indistinguishable from a hang without inspecting
-   raw response headers. Both issues were real and both got fixed (the
-   loop-safety guard in `call_tool_sync` is still a legitimate defensive
-   fix even though it wasn't the actual cause this time).
-
-2. **Security scanner missed a real CVE-referenced issue** (express
-   #7391, "fails open... (CVE-2026-12590)", mentions DoS). Root cause:
-   keyword list didn't include `cve`, `dos`, `denial of service`, or
-   `fails open`. Fixed by expanding the list to match `agents/CLAUDE.md`
-   §4.3's original spec plus these real-world additions.
-
-3. **False-positive security finding**: `"rce"` matched inside
-   "enfo**rce**ment" via bare substring search. Fixed with `\b` word-boundary
-   regex matching — but this then caused a **regression**: `"auth"` no
-   longer matched inside "authenticate" (correct per word-boundary logic,
-   but lost a real signal), and `"api key"` didn't match `API_KEY`
-   (underscore vs. space). Fixed by adding `authenticate`/`unauthorized`
-   as explicit keywords and normalizing underscores/hyphens to spaces
-   before matching.
-
-4. **Health scores always flat at neutral 70**, even for repos with
-   multiple escalated/duplicate investigations. Root cause: `
-   get_repo_health`/`get_brief` route functions declared a parameter named
-   `repo_slug` while the path template was `{owner}/{repo}` — FastAPI never
-   bound the path segment, so `repo_name` silently became just `owner`
-   with no matching investigations. Compounded by `from memory import repo`
-   shadowing a function parameter also named `repo` once the naming was
-   fixed. Fixed by renaming the param to match the path (`repo: str`) and
-   aliasing the module import to `db`.
-
-5. **Cross-repo data leak**: switching the dashboard's repo picker didn't
-   change the escalation count or investigation list — both endpoints
-   returned data for *every* repo, filtered only client-side inconsistently
-   across pages. Fixed with a real `repo_name` query param on both
-   endpoints, used consistently everywhere.
-
-6. **`UNIQUE constraint failed: chain_steps.step_id`** crash on every
-   investigation. Root cause: `chain_step` decorator legitimately writes
-   the same `step_id` twice (once `running`, once `done`), but
-   `insert_step` was a plain `INSERT`. Fixed with `INSERT ... ON CONFLICT
-   DO UPDATE`.
-
-7. **Repo picker accepted a pasted full GitHub URL as literal repo_name**
-   (`https://github.com/aryabailur/Doombot.git`), which then matched
-   nothing on the backend. Fixed with a normalizer accepting 4 common
-   input forms, rejecting anything else with a visible inline error.
-
-8. **Stuck-forever "running" investigations** from the deadlock-debugging
-   era, never resolved because the server was killed mid-run. These are a
-   **structural gap**, not a one-off — any server restart mid-investigation
-   leaves an orphaned row. Fixed generally with a startup reconciliation
-   pass (`reconcile_orphaned_investigations()`), not just a one-time manual
-   cleanup.
-
-9. **`mcp>=1.28` resolved to `mcp==2.0.0`**, which has a different API
-   (`mcp.server.fastmcp.FastMCP` doesn't exist in that surface) — broke
-   `mcp_server/tools.py` imports. Pinned to `mcp>=1.28,<2.0`, confirmed
-   `1.29.0` has the expected API.
-
----
-
-## 5. Next step
-
-Nothing is currently broken or mid-fix — the session ended on a clean,
-verified state. In priority order, here's what I'd do next:
-
-1. **Commit and push this work.** Everything above is uncommitted on
-   `feat/a-core-api-and-dashboard`. That branch was pushed once earlier
-   (before this session's fixes) — needs a new commit + push. Given the
-   scale of changes (bug fixes across backend + a full dashboard rewrite),
-   consider whether this should be one commit or split by concern
-   (backend fixes vs. dashboard rewrite) before opening/updating the PR.
-   Recall from the earlier session: this branch was built from a **stale
-   base** — `origin/main` has since advanced with real Stream B/C/D work
-   this branch doesn't incorporate, so merging will need real
-   reconciliation, especially in `dashboard/` (two different dashboards
-   now exist: the one already merged on `main`, and this session's).
-
-2. **Wire a real Project Memory / retrieval-browser endpoint.** Right now
-   `ProjectMemory.tsx` derives stats from investigation history rather
-   than exposing raw Chroma retrieval — there's no backend endpoint for
-   "show me what's indexed" or "run an ad-hoc similarity query." Would
-   need a new route (e.g. `GET /api/repos/{owner}/{repo}/memory`) backed
-   by `rag.retriever`.
-
-3. **Persistent Agent Activity log.** `AgentActivity.tsx` currently only
-   shows events from the *current browser session's* WebSocket stream —
-   refreshing the page loses history. Would need either a dedicated
-   `activity_log` table or a derived view over `chain_steps` +
-   `investigations` joined and paginated.
-
-4. **Re-check `get_issues`'s scale characteristics.** During this session,
-   fetching 100 issues from a large/busy repo (express) took over a
-   minute in one run — likely from PyGithub's per-issue lazy attribute
-   fetches (`.pull_request`, `.user.login`, `.labels`) each costing a
-   separate API call, compounded by GitHub's Issues API mixing in PRs
-   that then get filtered out client-side. Worth profiling and possibly
-   requesting fewer fields per page or using GraphQL instead of REST for
-   bulk issue listing if this becomes a real bottleneck.
-
-5. **Decide on health-score staleness signal.** `_compute_health_breakdown`
-   in `api/routes_repos.py` hardcodes `staleness = 70.0` with a "no
-   repo-age signal wired yet" comment — this is an intentional, honest
-   placeholder, not a bug, but it's the one sub-score that's never real.
+1. Commit and push (done this session — branch renamed/pushed as `mayank`,
+   but still not merged/PR'd, see §6.2).
+2. Wire a real Project Memory retrieval endpoint (**done this session**).
+3. Persistent Agent Activity log (**done this session**).
+4. Re-check `get_issues` scale characteristics on large repos (**confirmed
+   still slow this session, root cause unchanged, not yet optimized** —
+   see §2.2, §6.4).
+5. Health-score staleness signal — still a hardcoded `70.0` placeholder in
+   `_compute_health_breakdown`, honest but unimplemented.

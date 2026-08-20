@@ -163,3 +163,24 @@ class SuggestedAction(BaseModel):
 class ApproveActionResponse(BaseModel):
     ok: bool
     result: str
+
+
+class GraphNode(BaseModel):
+    id: str
+    name: str
+    type: Literal["Repository", "Directory", "File", "Issue", "PullRequest", "Decision"]
+    file: str | None = None
+    val: float = 1.0
+
+
+class GraphLink(BaseModel):
+    source: str
+    target: str
+    type: Literal["CONTAINS", "EVIDENCE", "DECIDED"]
+    score: float | None = None
+
+
+class RepoGraphResponse(BaseModel):
+    nodes: list[GraphNode]
+    links: list[GraphLink]
+    metadata: dict

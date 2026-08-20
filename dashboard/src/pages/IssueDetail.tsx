@@ -63,7 +63,17 @@ export function IssueDetail() {
   }
 
   if (!investigation) {
-    return <p className="text-sm text-muted">Loading investigation…</p>;
+    return (
+      <div className="flex flex-col gap-6">
+        <div className="skeleton-block h-4 w-24" />
+        <div className="flex flex-col gap-2">
+          <div className="skeleton-block h-4 w-16" />
+          <div className="skeleton-block h-8 w-96" />
+        </div>
+        <div className="skeleton-block h-32 w-full rounded-2xl" />
+        <div className="skeleton-block h-64 w-full rounded-2xl" />
+      </div>
+    );
   }
 
   const isSilent = investigation.decision === "silent";

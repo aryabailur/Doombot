@@ -175,3 +175,25 @@ export interface ApproveActionResponseApi {
   ok: boolean;
   result: string;
 }
+
+// Mirrors new GraphNode/GraphLink/RepoGraphResponse models in api/schemas.py (additive, non-breaking).
+export interface GraphNode {
+  id: string;
+  name: string;
+  type: "Repository" | "Directory" | "File" | "Issue" | "PullRequest" | "Decision";
+  file: string | null;
+  val: number;
+}
+
+export interface GraphLink {
+  source: string;
+  target: string;
+  type: "CONTAINS" | "EVIDENCE" | "DECIDED";
+  score: number | null;
+}
+
+export interface RepoGraphResponse {
+  nodes: GraphNode[];
+  links: GraphLink[];
+  metadata: Record<string, unknown>;
+}

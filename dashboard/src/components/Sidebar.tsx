@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
 import {
   LayoutGrid,
@@ -16,12 +16,16 @@ import {
 } from "lucide-react";
 import { useRepo } from "../lib/RepoContext";
 import { indexRepo } from "../lib/api";
+import { loadInvestigationsWithDetail } from "../lib/adapters";
+import type { Investigation } from "../lib/seed";
 
 interface NavItem {
   to: string;
   label: string;
   icon: typeof LayoutGrid;
   end?: boolean;
+  /** key into the real nav-count map computed from loaded investigations */
+  countKey?: "needsYou" | "duplicates";
 }
 
 const NAV_GROUPS: { label: string | null; items: NavItem[] }[] = [
@@ -32,8 +36,8 @@ const NAV_GROUPS: { label: string | null; items: NavItem[] }[] = [
   {
     label: "Attention",
     items: [
-      { to: "/attention", label: "Needs You", icon: Bell },
-      { to: "/duplicates", label: "Duplicates", icon: Copy },
+      { to: "/attention", label: "Needs You", icon: Bell, countKey: "needsYou" },
+      { to: "/duplicates", label: "Duplicates", icon: Copy, countKey: "duplicates" },
       { to: "/security", label: "Security", icon: ShieldAlert },
     ],
   },
@@ -42,6 +46,7 @@ const NAV_GROUPS: { label: string | null; items: NavItem[] }[] = [
     items: [
       { to: "/health", label: "Project Health", icon: Activity },
       { to: "/memory", label: "Project Memory", icon: BrainCircuit },
+      { to: "/code-graph", label: "Code Graph", icon: GitBranch },
     ],
   },
   {
@@ -57,6 +62,22 @@ const NAV_GROUPS: { label: string | null; items: NavItem[] }[] = [
     items: [{ to: "/brief", label: "Brief", icon: FileText }],
   },
 ];
+
+// Real counts, computed once per repoName from the same
+// loadInvestigationsWithDetail() every other page already calls — no second
+// data-loading path. "needsAttention" and "duplicate" mirror the exact
+// filters CommandCenter.tsx and DuplicateIntelligence.tsx use on themselves.
+// Security is intentionally NOT computed here: a real count would require
+// SecuritySignals.tsx's per-investigation getInvestigation() N+1 scan over
+// raw step evidence (detailToInvestigation collapses evidence.type before it
+// reaches Investigation), and Sidebar renders on every route — paying that
+// cost globally isn't justified for a nav badge. Omitted rather than faked.
+function computeNavCounts(investigations: Investigation[]): Partial<Record<NonNullable<NavItem["countKey"]>, number>> {
+  return {
+    needsYou: investigations.filter((i) => i.needsAttention).length,
+    duplicates: investigations.filter((i) => i.decision === "duplicate").length,
+  };
+}
 
 /**
  * Accepts "owner/repo" directly, or a pasted GitHub URL in any common form
@@ -83,6 +104,21 @@ export function Sidebar() {
   const [indexing, setIndexing] = useState(false);
   const [indexed, setIndexed] = useState(false);
   const [inputError, setInputError] = useState(false);
+  const [navCounts, setNavCounts] = useState<Partial<Record<NonNullable<NavItem["countKey"]>, number>>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    loadInvestigationsWithDetail(repoName)
+      .then((investigations) => {
+        if (!cancelled) setNavCounts(computeNavCounts(investigations));
+      })
+      .catch(() => {
+        if (!cancelled) setNavCounts({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [repoName]);
 
   function commit() {
     const normalized = normalizeRepoInput(draft);
@@ -202,15 +238,38 @@ export function Sidebar() {
                     to={item.to}
                     end={item.end}
                     className={({ isActive }) =>
-                      `flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-semibold transition-colors ${
+                      `group relative flex items-center gap-2.5 overflow-hidden rounded-lg px-2.5 py-2 text-sm font-semibold transition-all duration-200 ${
                         isActive
                           ? "translate-x-0.5 bg-ink text-white shadow-flat-sm"
-                          : "text-ink/70 hover:bg-background hover:text-ink"
+                          : "text-ink/70 hover:translate-x-1 hover:bg-background hover:text-ink"
                       }`
                     }
                   >
-                    <item.icon className="h-4 w-4" strokeWidth={2.25} />
-                    {item.label}
+                    {({ isActive }) => (
+                      <>
+                        {isActive && (
+                          <span className="animate-nav-indicator absolute left-0 top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-full bg-accent" />
+                        )}
+                        <item.icon
+                          className={`h-4 w-4 shrink-0 transition-transform duration-200 ${isActive ? "" : "group-hover:scale-110"}`}
+                          strokeWidth={2.25}
+                        />
+                        <span className="flex-1 truncate text-left">{item.label}</span>
+                        {item.countKey !== undefined && (navCounts[item.countKey] ?? 0) > 0 && (
+                          <span
+                            className={`animate-count-up flex-none rounded-full px-1.5 py-0.5 font-mono text-[10px] font-bold ${
+                              isActive
+                                ? "bg-white/20 text-white"
+                                : item.countKey === "needsYou"
+                                  ? "bg-danger-soft text-danger"
+                                  : "bg-info-soft text-info"
+                            }`}
+                          >
+                            {navCounts[item.countKey]}
+                          </span>
+                        )}
+                      </>
+                    )}
                   </NavLink>
                 </li>
               ))}
