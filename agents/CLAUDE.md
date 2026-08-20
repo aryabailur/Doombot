@@ -435,7 +435,7 @@ def _get_llm() -> ChatGroq:
     GROQ_API_KEY to be set. Reads the model name from GROQ_MODEL so it can
     be swapped without a code change if Groq deprecates a model mid-event.
     """
-    model_name = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    model_name = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
     return ChatGroq(model=model_name)
 ```
 

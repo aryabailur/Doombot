@@ -93,7 +93,7 @@ These repeat `CLAUDE.md` §2 because they are the ones most often broken:
   `(patch, evidence)`; `@chain_step` does persistence and streaming.
 - **Never edit `api/schemas.py`** after the contract freeze without announcing a
   breaking change and updating `dashboard/src/lib/types.ts` in the same PR.
-- **Never use OpenAI.** This project runs Groq `llama-3.3-70b-versatile` plus
+- **Never use OpenAI.** This project runs Groq `openai/gpt-oss-120b` plus
   local MiniLM embeddings. No `openai` package, no `gpt-*`, no `OPENAI_API_KEY`.
 - **Never report success you did not verify.** Paste the actual command output.
 

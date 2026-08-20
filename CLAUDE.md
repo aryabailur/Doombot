@@ -20,7 +20,7 @@ It escalates only what needs a human, and posts real comments and labels back to
 GitHub.
 
 **Stack (this is the truth; ignore any doc that says otherwise):**
-Python 3.14 · LangGraph · **Groq `llama-3.3-70b-versatile`** · MCP (FastMCP) ·
+Python 3.14 · LangGraph · **Groq `openai/gpt-oss-120b`** · MCP (FastMCP) ·
 PyGithub · ChromaDB + local `all-MiniLM-L6-v2` · FastAPI · SQLite ·
 React + Vite + TypeScript + Tailwind · VS Code webview
 
