@@ -13,6 +13,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { Button } from '@/components/ui/button'
 import { SkeletonState } from '@/components/SkeletonState'
 import type {
+  CodeGraphEdgeType,
   CodeGraphLink,
   CodeGraphNode,
   CodeGraphResponse,
@@ -42,10 +43,19 @@ const ForceGraph3D = lazy(() => import('react-force-graph-3d'))
  * -- which every caller relies on -- the mismatch is absorbed here, at the
  * single boundary where it exists.
  */
-type SimNode = GraphNode & { x?: number; y?: number }
+type SimNode = GraphNode & { x?: number; y?: number; vx?: number; vy?: number }
+type D3Force = {
+  strength?: (v: number | ((node: SimNode) => number)) => void
+  /** d3-force accepts a constant or a per-link accessor. */
+  distance?: (v: number | ((link: GraphLink) => number)) => void
+}
+type CustomForce = {
+  (alpha: number): void
+  initialize?: (nodes: SimNode[]) => void
+}
 type GraphHandle = {
   zoomToFit: (ms: number, px: number) => void
-  d3Force: (name: string) => { strength?: (v: number) => void; distance?: (v: number) => void } | undefined
+  d3Force: (name: string, force?: CustomForce) => D3Force | undefined
 }
 
 export type GraphCategory = IssueGraphCategory
@@ -85,6 +95,38 @@ const categoryLabel: Record<GraphCategory, string> = {
   stale: 'Stale',
   resolved: 'Resolved',
   open: 'Open',
+}
+
+/**
+ * Stable key for an issue link, regardless of simulation state.
+ *
+ * The force simulation mutates its input, replacing each link's
+ * `source`/`target` *string* with a reference to the node object itself. Any
+ * comparison made after the first tick therefore has to normalize -- missing
+ * this meant every key lookup missed and hovering dimmed the entire graph
+ * instead of lighting one neighbourhood.
+ */
+function issueLinkKey(link: {
+  source: string | { id: string }
+  target: string | { id: string }
+}): string {
+  const from = typeof link.source === 'string' ? link.source : link.source.id
+  const to = typeof link.target === 'string' ? link.target : link.target.id
+  return `${from}->${to}`
+}
+
+/** Runtimes the code graph assigns, in a stable display order. */
+const RUNTIMES = ['python', 'server', 'browser', 'shared'] as const
+
+/** Add or remove one value, returning a new Set so React sees the change. */
+function toggleIn(current: Set<string>, value: string): Set<string> {
+  const next = new Set(current)
+  if (next.has(value)) {
+    next.delete(value)
+  } else {
+    next.add(value)
+  }
+  return next
 }
 
 const linkLabel: Record<GraphLinkKind, string> = {
@@ -132,11 +174,70 @@ const ALL_CATEGORIES: GraphCategory[] = [
  * an edge reports the reason it exists.
  */
 export function IssueGraph(props: IssueGraphProps) {
-  if (props.codeGraph) {
+  const hasIssues = (props.nodes?.length ?? 0) > 0
+  const hasCode = Boolean(props.codeGraph)
+
+  // Default to whichever view has data, preferring issue relationships --
+  // that is the F15 headline, and the code graph is the supporting view.
+  const [view, setView] = useState<'issues' | 'code'>(
+    hasIssues ? 'issues' : 'code',
+  )
+
+  // Previously `if (props.codeGraph)` returned early, so passing both data
+  // sets rendered only the code graph and the issue-relationship view was
+  // unreachable -- built, served by the API, and never seen. When both are
+  // present they are now switchable rather than one silently winning.
+  if (hasIssues && hasCode) {
+    return (
+      <div className={cn('flex flex-col gap-3', props.className)}>
+        <div
+          aria-label="Graph view"
+          className="flex items-center gap-1 self-start rounded-lg border border-border bg-surface p-1"
+          role="tablist"
+        >
+          <Button
+            aria-selected={view === 'issues'}
+            onClick={() => setView('issues')}
+            role="tab"
+            size="sm"
+            variant={view === 'issues' ? 'secondary' : 'ghost'}
+          >
+            <Network aria-hidden="true" className="size-4" />
+            Issue relationships
+          </Button>
+          <Button
+            aria-selected={view === 'code'}
+            onClick={() => setView('code')}
+            role="tab"
+            size="sm"
+            variant={view === 'code' ? 'secondary' : 'ghost'}
+          >
+            <Code2 aria-hidden="true" className="size-4" />
+            Code structure
+          </Button>
+        </div>
+
+        {view === 'issues' ? (
+          <IssueRelationshipGraph
+            links={props.links ?? []}
+            nodes={props.nodes ?? []}
+            onSelectIssue={props.onSelectIssue}
+          />
+        ) : (
+          <CodeGraphExplorer
+            graph={props.codeGraph!}
+            onSelectCode={props.onSelectCode}
+          />
+        )}
+      </div>
+    )
+  }
+
+  if (hasCode) {
     return (
       <CodeGraphExplorer
         className={props.className}
-        graph={props.codeGraph}
+        graph={props.codeGraph!}
         onSelectCode={props.onSelectCode}
       />
     )
@@ -162,8 +263,49 @@ function IssueRelationshipGraph({
   // Structural type rather than the library's ForceGraphMethods, which is
   // only reachable through the lazily-imported module.
   const graphRef = useRef<GraphHandle | null>(null)
+  /** Node list handed to us by the simulation, for the gravity force. */
+  const simNodes = useRef<SimNode[]>([])
+  /** Node count at the last auto-fit, so hover cannot re-frame the view. */
+  const fittedCount = useRef<number | null>(null)
   const [hidden, setHidden] = useState<Set<GraphCategory>>(new Set())
   const [selectedLink, setSelectedLink] = useState<GraphLink | null>(null)
+
+  /**
+   * Hovered node, and its immediate neighbourhood.
+   *
+   * Obsidian's graph makes structure legible by focus rather than by drawing
+   * more: hovering a note lifts it and its links and fades everything else.
+   * At any real repository size that is the difference between a hairball and
+   * a readable neighbourhood, and it costs one hover handler plus an opacity
+   * decision in the painters.
+   */
+  const [hoveredId, setHoveredId] = useState<string | null>(null)
+
+  const neighbourhood = useMemo(() => {
+    if (!hoveredId) {
+      return null
+    }
+    const ids = new Set<string>([hoveredId])
+    const edges = new Set<string>()
+    for (const link of links) {
+      if (link.source === hoveredId || link.target === hoveredId) {
+        ids.add(link.source)
+        ids.add(link.target)
+        edges.add(`${link.source}->${link.target}`)
+      }
+    }
+    return { ids, edges }
+  }, [hoveredId, links])
+
+  /** Ids with at least one edge, so the layout can treat orphans differently. */
+  const connectedIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const link of links) {
+      ids.add(link.source)
+      ids.add(link.target)
+    }
+    return ids
+  }, [links])
 
   // Force strengths, applied once the lazy component has mounted.
   //
@@ -176,9 +318,122 @@ function IssueRelationshipGraph({
     if (!handle?.d3Force) {
       return
     }
-    handle.d3Force('charge')?.strength?.(-260)
-    handle.d3Force('link')?.distance?.(70)
-  })
+
+    // Unconnected nodes get no link force, so plain charge repulsion throws
+    // them to the far corners of the canvas. zoomToFit then has to frame
+    // those outliers, which shrinks the actual cluster to a few pixels in a
+    // corner -- one orphan issue was enough to make the whole graph
+    // unreadable, which is the single biggest reason it looked arbitrary.
+    //
+    // Repulsion is therefore scaled down for nodes with no edges, and a weak
+    // centering force holds them in a loose "no relationships yet" group near
+    // the middle. Connected clusters keep the strong repulsion that separates
+    // them; the orphans stop dictating the viewport.
+    handle.d3Force('charge')?.strength?.((node: SimNode) =>
+      connectedIds.has(node.id) ? -260 : -40,
+    )
+
+    // Link distance proportional to relatedness, the way Obsidian's graph
+    // spaces notes: a 0.99-similarity duplicate sits almost on top of its
+    // twin, a 0.66 "related" edge sits far out. A single fixed distance --
+    // what this used before -- draws a 0.99 duplicate and a 0.66 near-miss
+    // exactly the same length apart, which is what made a real hierarchy of
+    // relatedness look like an arbitrary scatter. Distance is now the primary
+    // carrier of the similarity score, not just line thickness.
+    handle.d3Force('link')?.distance?.(
+      (link: GraphLink) => 30 + (1 - link.score) * 190,
+    )
+
+    // A gravity force toward the origin, applied per node.
+    //
+    // NOT forceCenter: despite the name it does not attract anything. It
+    // computes the centroid and translates every node by the same offset, so
+    // relative positions are untouched -- it can never pull an orphan toward
+    // the cluster, and setting its strength below 1 only weakens that
+    // recentering. Orphans stayed exiled because nothing was pulling them in.
+    //
+    // Written by hand rather than imported from d3-force-3d: that package is
+    // a transitive dependency of react-force-graph, not one we declare, and
+    // importing it directly would add an undeclared dependency (root
+    // CLAUDE.md rule 10) for ~10 lines of arithmetic.
+    //
+    // Orphans are pulled ~4x harder so they gather near the middle instead of
+    // drifting to the corners, while connected clusters stay loose enough for
+    // the link forces to shape them.
+    const gravity = (alpha: number) => {
+      const all = simNodes.current
+
+      // Chronological ordering, so a duplicate chain reads left-to-right as
+      // "original -> later report" instead of as an undirected blob. This is
+      // the flow the plain scatter was missing: `similar` and `duplicate`
+      // edges are symmetric, so nothing in the data implied a direction and
+      // the layout had none to show. Issue number is a real ordering that is
+      // always present.
+      //
+      // Rank is computed over the connected nodes only, and by position in
+      // that list rather than by raw issue number. Both matter. Ranking over
+      // every node let unconnected issues consume slots, which pushed the
+      // cluster off-centre -- with issues 2..6 and only #3, #4, #6 connected,
+      // their slots were -80, 0 and +160 for a centroid of +27, visibly
+      // right-of-centre. Using rank rather than the number itself also keeps
+      // the spacing even when issue numbers are sparse (#3, #97, #412 read as
+      // three evenly spaced columns, not two nodes crushed against one edge).
+      const ordered = all
+        .filter((node) => connectedIds.has(node.id))
+        .sort((left, right) => left.number - right.number)
+      const lastIndex = Math.max(1, ordered.length - 1)
+      const slotOf = new Map<string, number>()
+      ordered.forEach((node, index) => {
+        slotOf.set(node.id, (index / lastIndex - 0.5) * 300)
+      })
+
+      // Unconnected issues are parked in a column to the left of the graph
+      // rather than left to drift. They have no relationships, so no position
+      // among the clusters would mean anything -- but scattering them into the
+      // corners made them dominate the viewport, which is what made the whole
+      // graph look arbitrary. A tidy "no relationships" gutter reads as a
+      // deliberate category instead of as noise.
+      const loners = all
+        .filter((node) => !connectedIds.has(node.id))
+        .sort((left, right) => left.number - right.number)
+      const lonerX = -260
+      const lonerSpacing = 46
+      const lonerTop = -((loners.length - 1) * lonerSpacing) / 2
+
+      loners.forEach((node, index) => {
+        if (node.x === undefined || node.y === undefined) {
+          return
+        }
+        const targetY = lonerTop + index * lonerSpacing
+        node.vx = (node.vx ?? 0) - (node.x - lonerX) * 0.12 * alpha
+        node.vy = (node.vy ?? 0) - (node.y - targetY) * 0.12 * alpha
+      })
+
+      for (const node of ordered) {
+        if (node.x === undefined || node.y === undefined) {
+          continue
+        }
+        // Gentle pull to the vertical centre line; the link forces own the
+        // vertical arrangement so clusters can still fan out.
+        node.vy = (node.vy ?? 0) - node.y * 0.015 * alpha
+
+        const slot = slotOf.get(node.id) ?? 0
+        // Strength 0.06: enough to establish the reading direction, gentle
+        // enough that the link forces still shape the cluster. At 0.15 the
+        // slots dominated and three mutually-linked issues snapped into a
+        // rigid isosceles triangle -- geometrically tidy but obviously
+        // machine-placed, and it read worse than a slightly irregular
+        // arrangement. Verified across 20 starting layouts: ordering still
+        // holds 20/20 and duplicates still sit closer 20/20 at this strength,
+        // so nothing is traded away for the softer look.
+        node.vx = (node.vx ?? 0) - (node.x - slot) * 0.06 * alpha
+      }
+    }
+    gravity.initialize = (assigned: SimNode[]) => {
+      simNodes.current = assigned
+    }
+    handle.d3Force('doombotGravity', gravity)
+  }, [connectedIds])
 
   const data = useMemo(() => {
     const visibleNodes = nodes.filter((node) => !hidden.has(node.category))
@@ -192,6 +447,16 @@ function IssueRelationshipGraph({
         .map((link) => ({ ...link })),
     }
   }, [hidden, links, nodes])
+
+  /** Visible nodes with no visible edge -- surfaced in the header. */
+  const unconnectedCount = useMemo(() => {
+    const linked = new Set<string>()
+    for (const link of data.links) {
+      linked.add(link.source)
+      linked.add(link.target)
+    }
+    return data.nodes.filter((node) => !linked.has(node.id)).length
+  }, [data])
 
   const toggle = (category: GraphCategory) => {
     setHidden((current) => {
@@ -211,22 +476,60 @@ function IssueRelationshipGraph({
       const x = node.x ?? 0
       const y = node.y ?? 0
       // Engagement drives size, square-rooted so one very busy issue does not
-      // dwarf everything else off the canvas.
-      const radius = 4 + Math.sqrt(Math.min(node.engagement, 100)) * 0.9
+      // dwarf everything else off the canvas. Floor of 7px: engagement is
+      // legitimately 0 on most issues in a young repository, and at radius 4
+      // those nodes were sub-pixel specks -- neither readable nor comfortably
+      // clickable. The sqrt term still differentiates busy issues; it no
+      // longer decides whether a node is visible at all.
+      // Matches the code graph's restrained scale (4-9px). At 7-14px, five
+      // nodes on a 420px canvas read as balloons rather than as a graph --
+      // the marks dominated the relationships they exist to connect.
+      const radius = 5 + Math.min(4, Math.sqrt(Math.min(node.engagement, 100)) * 1.4)
       const colour = token(categoryToken[node.category])
 
-      if (node.escalated) {
+      // Focus, the way Obsidian does it: on hover the neighbourhood keeps
+      // full contrast and everything else fades back. Nothing moves and
+      // nothing is hidden -- the structure around the cursor simply becomes
+      // the only thing competing for attention.
+      const focused = neighbourhood ? neighbourhood.ids.has(node.id) : true
+      ctx.globalAlpha = focused ? 1 : 0.15
+
+      // A soft halo under each node, brighter for the hovered one. This is
+      // what stops a force graph reading as flat scattered dots: it gives
+      // every node a little depth and makes the hovered one clearly lifted.
+      const isHovered = node.id === hoveredId
+      if (focused) {
+        const glow = ctx.createRadialGradient(x, y, radius * 0.5, x, y, radius * (isHovered ? 3.2 : 2.1))
+        glow.addColorStop(0, colour)
+        glow.addColorStop(1, 'transparent')
+        ctx.globalAlpha = (focused ? 1 : 0.15) * (isHovered ? 0.4 : 0.18)
         ctx.beginPath()
-        ctx.arc(x, y, radius + 3, 0, 2 * Math.PI)
+        ctx.arc(x, y, radius * (isHovered ? 3.2 : 2.1), 0, 2 * Math.PI)
+        ctx.fillStyle = glow
+        ctx.fill()
+        ctx.globalAlpha = focused ? 1 : 0.15
+      }
+
+      if (node.escalated) {
+        ctx.globalAlpha = (focused ? 1 : 0.15) * 0.7
+        ctx.beginPath()
+        ctx.arc(x, y, radius + 4, 0, 2 * Math.PI)
         ctx.strokeStyle = colour
-        ctx.lineWidth = 1.2 / scale
+        ctx.lineWidth = 1 / scale
         ctx.stroke()
+        ctx.globalAlpha = focused ? 1 : 0.15
       }
 
       ctx.beginPath()
       ctx.arc(x, y, radius, 0, 2 * Math.PI)
       ctx.fillStyle = colour
       ctx.fill()
+
+      // A dark rim separates touching nodes, which is how Obsidian keeps a
+      // dense cluster from fusing into one blob.
+      ctx.lineWidth = 1.5 / scale
+      ctx.strokeStyle = token('--surface-1')
+      ctx.stroke()
 
       // The number is drawn at every zoom level. It was previously gated
       // behind `scale > 1.1`, which meant the default view rendered as bare
@@ -242,8 +545,21 @@ function IssueRelationshipGraph({
       ctx.textBaseline = 'top'
       ctx.fillStyle = token('--text-secondary')
       ctx.fillText(`#${node.number}`, x, y + radius + 2 / scale)
+
+      // Titles appear for the hovered neighbourhood, or once zoomed in far
+      // enough to have room for them -- Obsidian's progressive disclosure.
+      // Showing every title at every zoom is what turns a graph into noise.
+      if (isHovered || (focused && neighbourhood) || scale > 1.6) {
+        const title =
+          node.title.length > 34 ? `${node.title.slice(0, 33)}…` : node.title
+        ctx.font = `${Math.min(12, Math.max(8, 9.5 / scale))}px ui-sans-serif, system-ui, sans-serif`
+        ctx.fillStyle = token('--text-muted')
+        ctx.fillText(title, x, y + radius + 2 / scale + fontSize + 1 / scale)
+      }
+
+      ctx.globalAlpha = 1
     },
-    [],
+    [hoveredId, neighbourhood],
   )
 
   if (nodes.length === 0) {
@@ -271,6 +587,16 @@ function IssueRelationshipGraph({
         </h2>
         <span className="text-xs text-text-muted">
           {data.nodes.length} issues · {data.links.length} connections
+          {unconnectedCount > 0 ? (
+            // Naming this explicitly matters: an isolated dot otherwise reads
+            // as a rendering glitch rather than the real finding, which is
+            // that the issue has no duplicate, reference, or shared-label
+            // relationship to anything else in the repository.
+            <span title="No duplicate, reference, or shared-label relationship to any other issue">
+              {' '}
+              · {unconnectedCount} unconnected
+            </span>
+          ) : null}
         </span>
         <Button
           className="ml-auto h-7 px-2 text-xs"
@@ -311,7 +637,7 @@ function IssueRelationshipGraph({
         })}
       </div>
 
-      <div className="h-[420px] w-full overflow-hidden rounded-lg border border-border bg-background">
+      <div className="h-[480px] w-full overflow-hidden rounded-lg border border-border bg-background">
         <Suspense fallback={<SkeletonState className="p-4" variant="card" />}>
         <ForceGraph2D
           backgroundColor="transparent"
@@ -321,21 +647,69 @@ function IssueRelationshipGraph({
           // exists to show.
           d3AlphaDecay={0.02}
           graphData={data}
-          height={420}
-          linkColor={(link) =>
-            token(
-              (link as GraphLink).kind === 'reference'
-                ? '--accent-bright'
-                : '--border',
+          height={480}
+          // Edges fade with the focus state too, so a hovered neighbourhood
+          // reads as a lit subgraph rather than a highlight over a hairball.
+          linkColor={(raw) => {
+            const link = raw as GraphLink
+            const dim =
+              neighbourhood && !neighbourhood.edges.has(issueLinkKey(link))
+            if (dim) {
+              return token('--border')
+            }
+            if (neighbourhood) {
+              return token('--accent-bright')
+            }
+            // `--border` (#24332a) is a 1px-divider colour: on the graph's
+            // near-black canvas it was effectively invisible, so the
+            // relationships the graph exists to show could not be seen. The
+            // code graph was already fixed for this; the issue graph was not.
+            return token(
+              link.kind === 'reference' ? '--accent-bright' : '--text-muted',
             )
-          }
+          }}
           linkDirectionalArrowLength={(link) =>
             (link as GraphLink).kind === 'reference' ? 3 : 0
           }
-          linkLineDash={(link) =>
-            (link as GraphLink).kind === 'similar' ? [3, 3] : null
+          // Particles travel along the strongest edges, and along the hovered
+          // neighbourhood. This is the "flow" cue: a duplicate chain visibly
+          // moves, so the eye follows the relationship instead of reading a
+          // static web. Capped tightly -- particles on every edge would be
+          // the noise this is meant to cut.
+          linkDirectionalParticles={(raw) => {
+            const link = raw as GraphLink
+            if (neighbourhood) {
+              return neighbourhood.edges.has(issueLinkKey(link))
+                ? 3
+                : 0
+            }
+            return link.kind === 'duplicate' ? 2 : 0
+          }}
+          linkDirectionalParticleSpeed={(raw) =>
+            0.002 + (raw as GraphLink).score * 0.004
           }
-          linkWidth={(link) => 0.6 + (link as GraphLink).score * 2}
+          linkDirectionalParticleWidth={2}
+          // A gentle curve on every edge. Three mutually-linked issues joined
+          // by straight lines form a hard geometric polygon, which is what
+          // made the cluster look machine-drawn; curved edges read as
+          // relationships rather than as a wireframe.
+          linkCurvature={0.12}
+          linkLineDash={(link) =>
+            (link as GraphLink).kind === 'similar' ? [2, 4] : null
+          }
+          // Thickness still tracks the score, but distance now carries it too
+          // (see the link force above), so the two reinforce each other.
+          linkWidth={(raw) => {
+            const link = raw as GraphLink
+            const dim =
+              neighbourhood && !neighbourhood.edges.has(issueLinkKey(link))
+            if (dim) {
+              return 0.5
+            }
+            // Kept deliberately thin. A 3px line between two 6px nodes reads
+            // as a bar joining them rather than as a connection.
+            return neighbourhood ? 2 : 0.8 + link.score * 1.2
+          }}
           nodeCanvasObject={
             paintNode as unknown as React.ComponentProps<
               typeof ForceGraph2D
@@ -350,9 +724,27 @@ function IssueRelationshipGraph({
           // the frame to be read at all.
           cooldownTicks={120}
           d3VelocityDecay={0.3}
-          onEngineStop={() => graphRef.current?.zoomToFit(400, 60)}
+          // Gated for the same reason as the code graph: hover is state, and
+          // an ungated fit here re-framed the camera every time the pointer
+          // crossed a node. Only a change in node count re-enables it.
+          onEngineStop={() => {
+            if (fittedCount.current === data.nodes.length) {
+              return
+            }
+            fittedCount.current = data.nodes.length
+            // Padding scales with how little there is to show. zoomToFit
+            // magnifies until the content fills the frame, so five nodes were
+            // blown up until they read as balloons on an empty field. A wide
+            // margin on a small graph keeps the marks at a sane size and
+            // leaves the whitespace looking deliberate.
+            const padding = data.nodes.length <= 8 ? 150 : 60
+            graphRef.current?.zoomToFit(400, padding)
+          }}
           onLinkClick={(link) => setSelectedLink(link as GraphLink)}
           onNodeClick={(node) => onSelectIssue?.(node as GraphNode)}
+          onNodeHover={(node) =>
+            setHoveredId(node ? (node as GraphNode).id : null)
+          }
           ref={graphRef as unknown as React.ComponentProps<typeof ForceGraph2D>['ref']}
           width={undefined}
         />
@@ -368,8 +760,12 @@ function IssueRelationshipGraph({
         </p>
       ) : (
         <p className="text-xs text-text-muted">
-          Click a connection to see why two issues are linked. Solid lines are
-          likely duplicates, dashed are related, arrows are explicit references.
+          Hover an issue to light its connections. Related issues run oldest to
+          newest left to right, and sit closer together the more similar they
+          are; issues with no relationships are parked in the left-hand column.
+          Solid lines are likely duplicates, dashed are related, arrows are
+          explicit references. Click a connection to see why two issues are
+          linked.
         </p>
       )}
 
@@ -470,14 +866,29 @@ function codeNodeColour(node: CodeGraphNode, clusters: string[]): string {
   return token(clusterToken(node.cluster_label, clusters))
 }
 
-function codeLinkColour(link: CodeGraphLink): string {
+/**
+ * Link colour for the code graph.
+ *
+ * The default edge used `--border` (#24332a), a near-black green-grey chosen
+ * for 1px dividers against a surface -- on the graph's #070a08 canvas it was
+ * effectively invisible, so the dependencies the graph exists to show could
+ * not be seen at all. `--text-muted` (#87958c) is the dimmest token that is
+ * still legible on that background.
+ *
+ * `dim` fades everything outside a focused neighbourhood instead of hiding it,
+ * so the surrounding structure stays as context.
+ */
+function codeLinkColour(link: CodeGraphLink, focus?: 'on' | 'dim'): string {
+  if (focus === 'dim') {
+    return token('--border')
+  }
   if (link.edge_type === 'http_calls') {
     return token('--accent-bright')
   }
   if (link.edge_type === 'renders') {
     return token('--information')
   }
-  return token('--border')
+  return focus === 'on' ? token('--accent-bright') : token('--text-muted')
 }
 
 function impactLabel(node: CodeGraphNode): string {
@@ -539,14 +950,79 @@ function GraphDatum({ label, value }: { label: string; value: string }) {
   )
 }
 
+/**
+ * The symbols one hop from `nodeId`, in one direction, as a selectable list.
+ */
+function CodeNeighbourList({
+  graph,
+  nodeId,
+  direction,
+  onSelect,
+}: {
+  graph: CodeGraphResponse
+  nodeId: string
+  direction: 'incoming' | 'outgoing'
+  onSelect?: (node: CodeGraphNode) => void
+}) {
+  const rows = graph.links
+    .filter((link) =>
+      direction === 'incoming' ? link.target === nodeId : link.source === nodeId,
+    )
+    .map((link) => {
+      const otherId = direction === 'incoming' ? link.source : link.target
+      return {
+        edge: link.edge_type,
+        node: graph.nodes.find((candidate) => candidate.id === otherId),
+      }
+    })
+    .filter(
+      (row): row is { edge: CodeGraphEdgeType; node: CodeGraphNode } =>
+        row.node !== undefined,
+    )
+
+  if (rows.length === 0) {
+    return null
+  }
+
+  return (
+    <div className="mt-4">
+      <p className="text-[11px] uppercase tracking-wide text-text-muted">
+        {direction === 'incoming'
+          ? `Called by (${rows.length})`
+          : `Depends on (${rows.length})`}
+      </p>
+      <ul className="mt-1.5 flex flex-col gap-1">
+        {rows.map((row) => (
+          <li key={`${direction}-${row.node.id}-${row.edge}`}>
+            <button
+              className="flex w-full items-baseline justify-between gap-2 rounded border border-transparent px-1.5 py-1 text-left hover:border-border hover:bg-background"
+              onClick={() => onSelect?.(row.node)}
+              type="button"
+            >
+              <span className="break-all font-mono text-xs text-text-primary">
+                {row.node.symbol_name}
+              </span>
+              <span className="shrink-0 text-[10px] uppercase tracking-wide text-text-muted">
+                {row.edge.replace('_', ' ')}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
 function GraphInspector({
   graph,
   node,
   link,
+  onSelectNode,
 }: {
   graph: CodeGraphResponse
   node: CodeGraphNode | null
   link: CodeGraphLink | null
+  onSelectNode?: (node: CodeGraphNode) => void
 }) {
   if (node) {
     return (
@@ -569,6 +1045,26 @@ function GraphInspector({
           <GraphDatum label="Incoming" value={String(node.in_degree)} />
           <GraphDatum label="Outgoing" value={String(node.out_degree)} />
         </dl>
+
+        {/*
+          The degree counts alone tell you a symbol has six callers without
+          naming one of them, which leaves the obvious next question --
+          "called by what?" -- answerable only by hunting the canvas. Listing
+          the actual neighbours makes the panel answer it directly, and each
+          row selects that symbol so the list doubles as navigation.
+        */}
+        <CodeNeighbourList
+          direction="incoming"
+          graph={graph}
+          nodeId={node.id}
+          onSelect={onSelectNode}
+        />
+        <CodeNeighbourList
+          direction="outgoing"
+          graph={graph}
+          nodeId={node.id}
+          onSelect={onSelectNode}
+        />
       </aside>
     )
   }
@@ -637,7 +1133,33 @@ function CodeGraphExplorer({
   const [canvasWidth, setCanvasWidth] = useState(800)
   const [dimension, setDimension] = useState<'2d' | '3d'>('3d')
   const [query, setQuery] = useState('')
+  /**
+   * Structured filters, because search alone cannot cut a hairball.
+   *
+   * 336 symbols and 430 dependencies rendered at once is not a graph a reader
+   * can interpret -- the shape is dominated by sheer edge count and no
+   * individual relationship is legible. Text search only helps when you
+   * already know the symbol's name; these let you narrow by structure first
+   * and then look, which is the order the question actually arrives in
+   * ("what does the API layer touch?" long before "where is `chain_step`?").
+   */
+  const [subsystems, setSubsystems] = useState<Set<string>>(new Set())
+  const [runtimes, setRuntimes] = useState<Set<string>>(new Set())
+  /**
+   * Hide low-connectivity leaves; 0 shows everything.
+   *
+   * Defaults to 2 rather than 0 deliberately. The full graph is 336 symbols
+   * and 430 dependencies, which renders as a hairball where no individual
+   * relationship is readable -- an unusable first impression. Measured against
+   * this repository: >=1 keeps 301 nodes (barely helps, since isolated symbols
+   * carry no edges anyway), >=2 keeps 191 nodes and 322 links, >=3 keeps 116
+   * and 200. 2 is the conservative choice -- it drops the single-reference
+   * leaves that add ink without structure, while keeping every real
+   * dependency chain. The slider goes to 0 for anyone who wants everything.
+   */
+  const [minDegree, setMinDegree] = useState(2)
   const [selectedNode, setSelectedNode] = useState<CodeGraphNode | null>(null)
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null)
   const [selectedLink, setSelectedLink] = useState<CodeGraphLink | null>(null)
   const [reducedMotion, setReducedMotion] = useState(false)
 
@@ -668,14 +1190,29 @@ function CodeGraphExplorer({
 
   const filtered = useMemo(() => {
     const normalized = query.trim().toLowerCase()
-    const nodes = normalized
-      ? graph.nodes.filter((node) =>
-          [node.symbol_name, node.qualname, node.file_path, node.cluster_label]
-            .join(' ')
-            .toLowerCase()
-            .includes(normalized),
-        )
-      : graph.nodes
+    const nodes = graph.nodes.filter((node) => {
+      if (
+        normalized &&
+        ![node.symbol_name, node.qualname, node.file_path, node.cluster_label]
+          .join(' ')
+          .toLowerCase()
+          .includes(normalized)
+      ) {
+        return false
+      }
+      // An empty set means "no restriction" rather than "hide everything" --
+      // the filters start open, so the first render is still the whole graph.
+      if (subsystems.size > 0 && !subsystems.has(node.cluster_label)) {
+        return false
+      }
+      if (runtimes.size > 0 && !runtimes.has(node.runtime)) {
+        return false
+      }
+      if (minDegree > 0 && node.in_degree + node.out_degree < minDegree) {
+        return false
+      }
+      return true
+    })
     const visibleIds = new Set(nodes.map((node) => node.id))
     const links = graph.links.filter(
       (link) => visibleIds.has(link.source) && visibleIds.has(link.target),
@@ -690,18 +1227,98 @@ function CodeGraphExplorer({
       }),
       links: links.map((link) => ({ ...link })),
     }
-  }, [dimension, graph.links, graph.nodes, query])
+  }, [dimension, graph.links, graph.nodes, minDegree, query, runtimes, subsystems])
+
+  /**
+   * The focused symbol and everything one hop from it.
+   *
+   * Hover previews, selection pins. Both feed one neighbourhood so the graph
+   * lights up the same way either way, and a selection survives the mouse
+   * leaving the canvas -- otherwise the detail panel describes a node whose
+   * links are no longer highlighted.
+   */
+  const focusId = hoveredNodeId ?? selectedNode?.id ?? null
+
+  const focus = useMemo(() => {
+    if (!focusId) {
+      return null
+    }
+    const nodeIds = new Set<string>([focusId])
+    const linkKeys = new Set<string>()
+    const incoming: CodeGraphLink[] = []
+    const outgoing: CodeGraphLink[] = []
+
+    for (const link of graph.links) {
+      if (link.source === focusId) {
+        outgoing.push(link)
+        nodeIds.add(link.target)
+        linkKeys.add(`${link.source}->${link.target}`)
+      } else if (link.target === focusId) {
+        incoming.push(link)
+        nodeIds.add(link.source)
+        linkKeys.add(`${link.source}->${link.target}`)
+      }
+    }
+    return { nodeIds, linkKeys, incoming, outgoing }
+  }, [focusId, graph.links])
+
+  /**
+   * Is this link inside the focused neighbourhood?
+   *
+   * The endpoints must go through `endpointId`. The force simulation mutates
+   * its input, replacing each link's `source`/`target` *string* with a
+   * reference to the node object itself. Comparing the raw value against a
+   * string key therefore missed on every link once the simulation had run --
+   * which dimmed the entire graph on hover instead of lighting one
+   * neighbourhood. `endpointId` already exists for exactly this hazard and is
+   * how the rest of this component reads a link's ends.
+   */
+  const linkFocus = useCallback(
+    (link: MutableCodeLink): 'on' | 'dim' | undefined => {
+      if (!focus) {
+        return undefined
+      }
+      const key = `${endpointId(link.source)}->${endpointId(link.target)}`
+      return focus.linkKeys.has(key) ? 'on' : 'dim'
+    },
+    [focus],
+  )
+
+  /**
+   * Auto-fit the camera, but only when the graph itself changes.
+   *
+   * `cooldownTicks={1}` means the engine stops on essentially every render,
+   * so wiring zoomToFit directly to onEngineStop made *any* state change
+   * refit the camera. Once hover became state, moving the mouse across a node
+   * re-rendered, the engine stopped, and the view zoomed out -- so hovering
+   * fought the user for control of the camera instead of highlighting links.
+   *
+   * The key below changes only when the data or viewport does. onEngineStop
+   * asks to fit; this grants it at most once per key.
+   */
+  const fitKey = `${dimension}:${filtered.nodes.length}:${canvasWidth}`
+  const fittedKey = useRef<string | null>(null)
+
+  const fitOnce = useCallback(() => {
+    if (fittedKey.current === fitKey) {
+      return
+    }
+    fittedKey.current = fitKey
+    graphRef.current?.zoomToFit(reducedMotion ? 0 : 400, 56)
+  }, [fitKey, reducedMotion])
 
   useEffect(() => {
     if (typeof window === 'undefined') {
       return
     }
+    // A new key means genuinely new data, so allow one more fit.
+    fittedKey.current = null
     const frame = window.setTimeout(
-      () => graphRef.current?.zoomToFit(reducedMotion ? 0 : 400, 56),
+      () => fitOnce(),
       reducedMotion ? 0 : 120,
     )
     return () => window.clearTimeout(frame)
-  }, [canvasWidth, dimension, filtered.nodes.length, reducedMotion])
+  }, [fitKey, fitOnce, reducedMotion])
 
   const selectNode = (node: CodeGraphNode) => {
     setSelectedNode(node)
@@ -727,6 +1344,28 @@ function CodeGraphExplorer({
       const radius = 4 + Math.min(5, node.hub_score * 8)
       const colour = codeNodeColour(node, graph.stats.clusters)
 
+      // Focus: the hovered or selected symbol and its direct dependencies stay
+      // at full contrast, everything else fades back. Nothing is hidden, so
+      // the rest of the codebase remains visible as context.
+      const inFocus = focus ? focus.nodeIds.has(node.id) : true
+      const isFocusRoot = node.id === focusId
+      ctx.globalAlpha = inFocus ? 1 : 0.12
+
+      // A halo under the focused symbol and its neighbours -- this is the
+      // "glow" that makes a selection legible in a 336-node mesh.
+      if (inFocus && focus) {
+        const spread = radius * (isFocusRoot ? 4 : 2.4)
+        const glow = ctx.createRadialGradient(x, y, radius * 0.4, x, y, spread)
+        glow.addColorStop(0, isFocusRoot ? token('--accent-bright') : colour)
+        glow.addColorStop(1, 'transparent')
+        ctx.globalAlpha = isFocusRoot ? 0.55 : 0.28
+        ctx.beginPath()
+        ctx.arc(x, y, spread, 0, Math.PI * 2)
+        ctx.fillStyle = glow
+        ctx.fill()
+        ctx.globalAlpha = 1
+      }
+
       if (node.impact_status !== 'unaffected') {
         ctx.beginPath()
         ctx.arc(x, y, radius + 3, 0, Math.PI * 2)
@@ -748,11 +1387,25 @@ function CodeGraphExplorer({
         ctx.font = `${fontSize}px ui-monospace, SFMono-Regular, monospace`
         ctx.textAlign = 'center'
         ctx.textBaseline = 'top'
+        ctx.fillStyle = isFocusRoot
+          ? token('--text-primary')
+          : token('--text-secondary')
+        ctx.fillText(node.symbol_name, x, y + radius + 2 / scale)
+      } else if (inFocus && focus) {
+        // Always label the focused neighbourhood, even when zoomed out past
+        // the usual label threshold -- naming what you are pointing at is the
+        // whole point of the interaction.
+        const fontSize = Math.min(80, Math.max(2, 11 / scale))
+        ctx.font = `${fontSize}px ui-monospace, SFMono-Regular, monospace`
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'top'
         ctx.fillStyle = token('--text-secondary')
         ctx.fillText(node.symbol_name, x, y + radius + 2 / scale)
       }
+
+      ctx.globalAlpha = 1
     },
-    [graph.stats.clusters],
+    [focus, focusId, graph.stats.clusters],
   )
 
   if (graph.nodes.length === 0) {
@@ -832,6 +1485,112 @@ function CodeGraphExplorer({
         <GraphMetric label="Languages" value={graph.stats.languages.length} />
       </div>
 
+      <div className="flex flex-col gap-2 rounded-lg border border-border bg-surface-2 p-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-medium uppercase tracking-wide text-text-secondary">
+            Subsystem
+          </span>
+          {graph.stats.clusters.map((cluster) => {
+            const on = subsystems.has(cluster)
+            const count = graph.nodes.filter(
+              (node) => node.cluster_label === cluster,
+            ).length
+            return (
+              <Button
+                aria-pressed={on}
+                className={cn('h-7 gap-1.5 px-2 text-xs', !on && 'opacity-60')}
+                key={cluster}
+                onClick={() => setSubsystems(toggleIn(subsystems, cluster))}
+                size="sm"
+                type="button"
+                variant={on ? 'secondary' : 'outline'}
+              >
+                {cluster}
+                <span className="text-text-muted">{count}</span>
+              </Button>
+            )
+          })}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-medium uppercase tracking-wide text-text-secondary">
+            Runtime
+          </span>
+          {RUNTIMES.map((runtime) => {
+            const on = runtimes.has(runtime)
+            const count = graph.nodes.filter(
+              (node) => node.runtime === runtime,
+            ).length
+            if (count === 0) {
+              return null
+            }
+            return (
+              <Button
+                aria-pressed={on}
+                className={cn('h-7 gap-1.5 px-2 text-xs', !on && 'opacity-60')}
+                key={runtime}
+                onClick={() => setRuntimes(toggleIn(runtimes, runtime))}
+                size="sm"
+                type="button"
+                variant={on ? 'secondary' : 'outline'}
+              >
+                {runtime}
+                <span className="text-text-muted">{count}</span>
+              </Button>
+            )
+          })}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <label
+            className="flex items-center gap-2 text-xs text-text-secondary"
+            htmlFor="code-graph-min-degree"
+          >
+            <span className="font-medium uppercase tracking-wide">
+              Min connections
+            </span>
+            <input
+              className="w-32 accent-[var(--accent)]"
+              id="code-graph-min-degree"
+              max={12}
+              min={0}
+              onChange={(event) => setMinDegree(Number(event.target.value))}
+              step={1}
+              type="range"
+              value={minDegree}
+            />
+            <span className="w-4 tabular-nums text-text-primary">
+              {minDegree}
+            </span>
+          </label>
+
+          <span className="text-xs text-text-muted">
+            Showing {filtered.nodes.length} of {graph.nodes.length} symbols
+            {' · '}
+            {filtered.links.length} of {graph.links.length} dependencies
+          </span>
+
+          {subsystems.size > 0 || runtimes.size > 0 || minDegree > 0 ? (
+            <Button
+              className="ml-auto h-7 px-2 text-xs"
+              onClick={() => {
+                setSubsystems(new Set())
+                setRuntimes(new Set())
+                // Back to 0, not the default of 2: "clear" should mean
+                // "show me everything", otherwise there is no way to reach
+                // the unfiltered graph from the UI.
+                setMinDegree(0)
+              }}
+              size="sm"
+              type="button"
+              variant="ghost"
+            >
+              Show all
+            </Button>
+          ) : null}
+        </div>
+      </div>
+
       <label className="relative block max-w-xl">
         <span className="sr-only">Search symbols, files, or subsystems</span>
         <Search
@@ -868,19 +1627,44 @@ function CodeGraphExplorer({
                   enableNodeDrag={false}
                   graphData={filtered}
                   height={560}
-                  linkColor={(raw) => codeLinkColour(raw as CodeGraphLink)}
+                  linkColor={(raw) =>
+                    codeLinkColour(
+                      raw as CodeGraphLink,
+                      linkFocus(raw as MutableCodeLink),
+                    )
+                  }
                   linkDirectionalArrowLength={(raw) =>
                     (raw as CodeGraphLink).edge_type === 'calls' ? 2 : 4
                   }
-                  linkDirectionalParticles={(raw) =>
-                    reducedMotion || (raw as CodeGraphLink).edge_type === 'calls'
-                      ? 0
-                      : 2
-                  }
-                  linkOpacity={0.55}
-                  linkWidth={(raw) =>
-                    (raw as CodeGraphLink).edge_type === 'http_calls' ? 1.5 : 0.8
-                  }
+                  // Particles trace the focused neighbourhood, which is what
+                  // makes a selected symbol's dependencies read as flowing
+                  // rather than as one more static line in the mesh.
+                  linkDirectionalParticles={(raw) => {
+                    if (reducedMotion) {
+                      return 0
+                    }
+                    const state = linkFocus(raw as MutableCodeLink)
+                    if (state === 'on') {
+                      return 4
+                    }
+                    if (state === 'dim') {
+                      return 0
+                    }
+                    return (raw as CodeGraphLink).edge_type === 'calls' ? 0 : 2
+                  }}
+                  linkOpacity={focus ? 0.9 : 0.7}
+                  linkWidth={(raw) => {
+                    const state = linkFocus(raw as MutableCodeLink)
+                    if (state === 'on') {
+                      return 3
+                    }
+                    if (state === 'dim') {
+                      return 0.4
+                    }
+                    return (raw as CodeGraphLink).edge_type === 'http_calls'
+                      ? 1.5
+                      : 0.9
+                  }}
                   nodeColor={(raw) =>
                     codeNodeColour(raw as CodeGraphNode, graph.stats.clusters)
                   }
@@ -892,11 +1676,12 @@ function CodeGraphExplorer({
                   nodeVal={(raw) =>
                     3 + Math.min(10, (raw as CodeGraphNode).hub_score * 14)
                   }
-                  onEngineStop={() =>
-                    graphRef.current?.zoomToFit(reducedMotion ? 0 : 400, 56)
-                  }
+                  onEngineStop={() => fitOnce()}
                   onLinkClick={(raw) => selectLink(raw as MutableCodeLink)}
                   onNodeClick={(raw) => selectNode(raw as CodeGraphNode)}
+                  onNodeHover={(raw) =>
+                    setHoveredNodeId(raw ? (raw as CodeGraphNode).id : null)
+                  }
                   ref={graphRef as unknown as React.ComponentProps<typeof ForceGraph3D>['ref']}
                   width={canvasWidth}
                 />
@@ -907,13 +1692,33 @@ function CodeGraphExplorer({
                   enableNodeDrag={false}
                   graphData={filtered}
                   height={560}
-                  linkColor={(raw) => codeLinkColour(raw as CodeGraphLink)}
+                  linkColor={(raw) =>
+                    codeLinkColour(
+                      raw as CodeGraphLink,
+                      linkFocus(raw as MutableCodeLink),
+                    )
+                  }
                   linkDirectionalArrowLength={(raw) =>
                     (raw as CodeGraphLink).edge_type === 'calls' ? 2 : 4
                   }
-                  linkWidth={(raw) =>
-                    (raw as CodeGraphLink).edge_type === 'http_calls' ? 1.5 : 0.8
+                  linkDirectionalParticles={(raw) =>
+                    !reducedMotion && linkFocus(raw as MutableCodeLink) === 'on'
+                      ? 4
+                      : 0
                   }
+                  linkDirectionalParticleWidth={2.5}
+                  linkWidth={(raw) => {
+                    const state = linkFocus(raw as MutableCodeLink)
+                    if (state === 'on') {
+                      return 3
+                    }
+                    if (state === 'dim') {
+                      return 0.4
+                    }
+                    return (raw as CodeGraphLink).edge_type === 'http_calls'
+                      ? 1.5
+                      : 0.9
+                  }}
                   nodeCanvasObject={
                     paintCodeNode as unknown as React.ComponentProps<
                       typeof ForceGraph2D
@@ -923,11 +1728,12 @@ function CodeGraphExplorer({
                     const node = raw as CodeGraphNode
                     return `${node.symbol_name} — ${node.file_path}:${node.start_line} — ${impactLabel(node)}`
                   }}
-                  onEngineStop={() =>
-                    graphRef.current?.zoomToFit(reducedMotion ? 0 : 400, 56)
-                  }
+                  onEngineStop={() => fitOnce()}
                   onLinkClick={(raw) => selectLink(raw as MutableCodeLink)}
                   onNodeClick={(raw) => selectNode(raw as CodeGraphNode)}
+                  onNodeHover={(raw) =>
+                    setHoveredNodeId(raw ? (raw as CodeGraphNode).id : null)
+                  }
                   ref={graphRef as unknown as React.ComponentProps<typeof ForceGraph2D>['ref']}
                   width={canvasWidth}
                 />
@@ -936,7 +1742,12 @@ function CodeGraphExplorer({
           )}
         </div>
 
-        <GraphInspector graph={graph} link={selectedLink} node={selectedNode} />
+        <GraphInspector
+          graph={graph}
+          link={selectedLink}
+          node={selectedNode}
+          onSelectNode={selectNode}
+        />
       </div>
 
       <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-text-muted">

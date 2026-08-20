@@ -117,6 +117,12 @@ def index_issues(repo_name: str, state: str = "all", limit: int = 200) -> int:
                 "labels": ",".join(labels),
                 "created_at": issue.get("created_at", ""),
                 "author": issue.get("author", ""),
+                # Engagement signals. get_issues() already returns these, but
+                # they were not being persisted, so rag.graph read them back
+                # as 0 for every issue -- which made node size a constant and
+                # silently killed one of the graph's four visual encodings.
+                "reactions": int(issue.get("reactions") or 0),
+                "comments": int(issue.get("comments") or 0),
             },
         )
         docs.append(doc)
