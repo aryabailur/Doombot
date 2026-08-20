@@ -1,0 +1,197 @@
+export type Decision = 'escalate' | 'silent' | 'follow_up' | 'duplicate'
+
+export type EvidenceSource = {
+  id: string
+  type: 'issue' | 'pull_request' | 'commit' | 'discussion' | 'decision'
+  title: string
+  url?: string
+  score?: number
+  reason: string
+  subsystem?: string
+  labels?: string[]
+}
+
+export type Insight = {
+  title: string
+  summary: string
+  confidence: number
+  decision: Decision
+  evidence: EvidenceSource[]
+  factors: string[]
+  suggestedAction: string
+  insufficientEvidence?: boolean
+}
+
+export type RepositoryContext = {
+  owner: string
+  repo: string
+  branch?: string
+  openIssues: number
+  openPullRequests: number
+  activeContributors: number
+  avgResponseHours: number
+  duplicateRate: number
+  healthScore: number
+}
+
+export type GitHubContext =
+  | { type: 'repository'; owner: string; repo: string }
+  | { type: 'issue'; owner: string; repo: string; issueNumber: number }
+  | { type: 'pull_request'; owner: string; repo: string; pullNumber: number }
+  | { type: 'unknown' }
+
+export type AgentRunState =
+  | 'queued'
+  | 'reading'
+  | 'retrieving'
+  | 'comparing'
+  | 'checking_precedent'
+  | 'assessing_impact'
+  | 'deciding'
+  | 'waiting_for_approval'
+  | 'completed'
+  | 'failed'
+
+export type AgentEvent = {
+  id: string
+  timestamp: string
+  runId: string
+  state: AgentRunState
+  title: string
+  detail?: string
+  sources?: EvidenceSource[]
+}
+
+export type IssueRecord = {
+  number: number
+  title: string
+  body: string
+  subsystem: string
+  labels: string[]
+  environment?: string
+  symptoms: string[]
+}
+
+export type PullRequestRecord = {
+  number: number
+  title: string
+  files: string[]
+  subsystem: string
+}
+
+export type Investigation = {
+  runId: string
+  issue: IssueRecord
+  insight: Insight
+  events: AgentEvent[]
+  approval?: ApprovalAction
+}
+
+export type DuplicateResult = {
+  issue: EvidenceSource
+  similarity: number
+  sameComponent: string
+  sameSymptom: string
+  sameEnvironment?: string
+  canonical: boolean
+}
+
+export type PRReview = {
+  pullRequest: PullRequestRecord
+  risk: 'low' | 'moderate' | 'high'
+  confidence: number
+  summary: string
+  path: string[]
+  evidence: EvidenceSource[]
+}
+
+export type HealthMetric = {
+  label: string
+  value: string
+  change: string
+  direction: 'up' | 'down'
+  concern: boolean
+}
+
+export type HealthReport = {
+  score: number
+  interpretation: string
+  metrics: HealthMetric[]
+  evidence: EvidenceSource[]
+}
+
+export type GroundedAnswer = {
+  answer: string
+  confidence: number
+  evidence: EvidenceSource[]
+  suggestedAction: string
+}
+
+export type MemoryGroup = {
+  subsystem: string
+  items: EvidenceSource[]
+}
+
+export type RepositoryMemory = {
+  indexed: {
+    commits: number
+    issues: number
+    pullRequests: number
+    contributors: number
+  }
+  groups: MemoryGroup[]
+}
+
+export type ActivitySummary = {
+  automatedCount: number
+  attentionCount: number
+  items: Array<{
+    issueNumber: number
+    title: string
+    confidence: number
+    severity: 'critical' | 'warning'
+  }>
+}
+
+export type ApprovalAction = {
+  id: string
+  kind: 'add_label' | 'post_comment' | 'link_issue' | 'request_information'
+  title: string
+  detail: string
+  reason: string
+  evidence: EvidenceSource[]
+  status: 'proposed' | 'approved' | 'rejected'
+}
+
+export type DecisionFeedback = {
+  issueNumber: number
+  useful: boolean
+  reason?: 'wrong_duplicate' | 'wrong_priority' | 'missing_evidence' | 'other'
+  createdAt: string
+}
+
+export type DemoState = {
+  approvals: Record<string, ApprovalAction['status']>
+  feedback: DecisionFeedback[]
+}
+
+export type ExtensionMessage =
+  | { type: 'GET_REPOSITORY_CONTEXT'; owner: string; repo: string }
+  | { type: 'GET_ISSUE_INSIGHT'; owner: string; repo: string; issueNumber: number }
+  | { type: 'RUN_INVESTIGATION'; owner: string; repo: string; issueNumber: number }
+  | { type: 'GET_ACTIVITY'; owner: string; repo: string }
+  | { type: 'GET_REPOSITORY_MEMORY'; owner: string; repo: string }
+  | { type: 'ASK_AGENT'; owner: string; repo: string; question: string; context?: GitHubContext }
+  | { type: 'GET_DUPLICATES'; owner: string; repo: string; issueNumber: number }
+  | { type: 'GET_PR_REVIEW'; owner: string; repo: string; pullNumber: number }
+  | { type: 'GET_HEALTH'; owner: string; repo: string }
+  | { type: 'APPROVE_ACTION'; action: ApprovalAction; approved: boolean }
+  | { type: 'RECORD_FEEDBACK'; feedback: DecisionFeedback }
+  | { type: 'RESET_DEMO' }
+  | { type: 'TOGGLE_LENS' }
+
+export type ExtensionResponse<T> =
+  | { ok: true; data: T }
+  | { ok: false; error: string; recoverable: boolean }
+
+export type LensView = 'overview' | 'investigation' | 'memory' | 'ask' | 'pr'
