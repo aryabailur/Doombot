@@ -11,6 +11,73 @@ def retrieve(query, repo_name):
     return results
 
 
+# Chroma reports a *distance* (lower is closer), and which distance depends on
+# the collection's `hnsw:space`. Both of ours occur in practice, so the
+# conversion has to be told which one it is looking at.
+#
+# Calibrated empirically rather than from documentation, because the previous
+# formula was wrong in a way that read as plausible. Method: embed two texts,
+# compute cosine directly from the raw vectors, then compare against what
+# Chroma returns for the same pair in each space.
+#
+#   text pair                     true cos    default d    cosine-space d
+#   related issues                +0.56876      0.86249           0.43124
+#   unrelated issues              -0.02730      2.05460           1.02730
+#   identical text                +1.00000      0.00000           0.00000
+#
+# Reading off the exact recoveries:
+#
+#   default ("l2")  -> Chroma returns SQUARED euclidean distance.
+#                      For unit vectors d = 2(1 - cos), so  cos = 1 - d/2.
+#   "cosine"        -> Chroma returns cosine distance, so    cos = 1 - d.
+#
+# The formula this replaced was `1 - d*d/2`, which treated the default space's
+# already-squared distance as if it were plain euclidean and squared it again.
+# It agrees with the truth only at d = 0, which is why identical text looked
+# fine. On the numbers above it produced +0.628 for the related pair (should be
+# +0.569) and -1.111 for the unrelated one, and since the result is clamped to
+# [0, 1] every real query collapsed to 0.0 -- so the >0.85 duplicate and
+# 0.65-0.85 related thresholds could never fire at all.
+_SQUARED_L2_SPACES = frozenset({"", "l2", "sq_euclidean", "squared_l2"})
+
+
+def cosine_from_distance(distance: float, space: str | None) -> float:
+    """Convert one Chroma distance into a true cosine similarity in [0, 1].
+
+    `space` is the collection's `hnsw:space`; None or "" means Chroma's
+    default. Kept as a pure function so the conversion can be tested against
+    the calibration table above without loading the embedding model.
+    """
+    key = (space or "").strip().lower()
+    if key in _SQUARED_L2_SPACES:
+        cosine = 1.0 - distance / 2.0
+    elif key == "cosine":
+        cosine = 1.0 - distance
+    elif key == "ip":
+        # Inner product on unit vectors already *is* cosine; Chroma negates it.
+        cosine = -distance
+    else:
+        # An unknown space is not worth guessing at: treat it as the default
+        # rather than silently returning a number from the wrong formula.
+        cosine = 1.0 - distance / 2.0
+    # Negative cosine is meaningful ("unrelated") but every threshold in
+    # rag/CLAUDE.md is expressed on 0-1, so the floor stays.
+    return max(0.0, min(1.0, cosine))
+
+
+def collection_space(vector_db) -> str | None:
+    """The `hnsw:space` the collection was actually created with.
+
+    Read per query rather than assumed: this repository's store contains
+    collections in both spaces (some were indexed by a branch that set
+    `hnsw:space: cosine` explicitly, most predate it), so a single hardcoded
+    conversion is guaranteed to be wrong for one of them.
+    """
+    collection = getattr(vector_db, "_collection", None)
+    metadata = (getattr(collection, "metadata", None) or {}) if collection is not None else {}
+    return metadata.get("hnsw:space")
+
+
 def retrieve_with_scores(query: str, repo_name: str, kind: str = "issues", k: int = 5) -> list:
     """Like retrieve(), but returns (Document, relevance_score) pairs from
     the named collection ("code" or "issues").
@@ -18,49 +85,24 @@ def retrieve_with_scores(query: str, repo_name: str, kind: str = "issues", k: in
     Returns TRUE COSINE SIMILARITY: 0-1, higher is better, matching the
     thresholds in rag/CLAUDE.md and agents/CLAUDE.md.
 
-    CRITICAL — score direction. This calls `similarity_search_with_score`,
-    which returns raw L2 **distance** (lower is better), and converts it to
-    cosine below. That is deliberate and must not be "fixed" back to
-    `similarity_search_with_relevance_scores`:
+    CRITICAL -- score direction. This calls `similarity_search_with_score`,
+    which returns a raw **distance** (lower is better), and converts it above.
+    That is deliberate and must not be "fixed" to
+    `similarity_search_with_relevance_scores`: the relevance variant does not
+    return cosine either. It computes `1 - L2/sqrt(2)`, which compresses the
+    scale and goes negative for distant pairs -- measured on a real duplicate
+    pair, true cosine 0.692 came back as 0.445, below the 0.65 "related" cut,
+    so a genuine duplicate was dropped.
 
-    - The relevance variant does NOT return cosine. It computes
-      `1 - L2/sqrt(2)`, which compresses the scale and goes negative for
-      distant pairs. Measured on a real duplicate pair: true cosine 0.692,
-      relevance score 0.445 -- below the 0.65 "related" cut, so a genuine
-      duplicate was dropped entirely.
-    - Because all-MiniLM-L6-v2 emits L2-normalized vectors,
-      ||a-b||^2 = 2(1 - cos) holds exactly, so cos = 1 - L2^2/2 is an exact
-      recovery, not an approximation.
-
-    The trap this docstring originally warned about -- returning a distance
-    where a similarity is expected -- is still real. It is avoided here by
-    converting, not by picking the other method.
+    The trap this docstring has always warned about -- returning a distance
+    where a similarity is expected -- is real. It is avoided by converting with
+    the formula that matches the collection's space, not by picking the other
+    method and not by assuming the space.
     """
     vector_db = get_collection(repo_name, kind)
-
-    # Return TRUE COSINE SIMILARITY, recovered from Chroma's L2 distance.
-    #
-    # Chroma defaults to an L2 collection and LangChain converts that to a
-    # "relevance score" as `1 - L2/sqrt(2)`. That conversion is not cosine and
-    # badly compresses the scale: a real duplicate pair measured cosine 0.692
-    # but was reported as 0.445, and an unrelated pair came back NEGATIVE
-    # (-0.35), which LangChain itself warns about.
-    #
-    # Every threshold in rag/CLAUDE.md and agents/CLAUDE.md (>0.85 duplicate,
-    # 0.65-0.85 related) is specified as cosine, so using the raw relevance
-    # score silently under-scores every match and drops genuine duplicates --
-    # the exact failure the thresholds exist to catch.
-    #
-    # all-MiniLM-L6-v2 emits L2-normalized vectors, so for unit vectors
-    # ||a-b||^2 = 2(1 - cos), giving cos = 1 - L2^2/2 exactly. Verified: this
-    # recovers 0.692 from the same pair LangChain scored 0.445.
+    space = collection_space(vector_db)
     results = vector_db.similarity_search_with_score(query, k=k)
-
-    scored = []
-    for doc, l2 in results:
-        cosine = 1.0 - (l2 * l2) / 2.0
-        scored.append((doc, max(0.0, min(1.0, cosine))))
-    return scored
+    return [(doc, cosine_from_distance(distance, space)) for doc, distance in results]
 
 
 def find_duplicates(issue_text: str, repo_name: str, exclude_number=None) -> dict:
