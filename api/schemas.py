@@ -9,9 +9,17 @@ from pydantic import BaseModel
 
 
 class Evidence(BaseModel):
-    type: str
+    # Closed union, matching agents/CLAUDE.md 3.6 -- these four are what the
+    # agent actually emits, and the dashboard's EvidenceCard keys a map on
+    # exactly them.
+    type: Literal["issue", "pr", "file", "rule"]
     ref: str
-    score: float
+    # Nullable. Rule-type evidence (a matched security keyword, a threshold
+    # note) has no meaningful score, and the agent sends None rather than a
+    # misleading 0.0. Declaring this `float` made every replay of a real
+    # investigation 500 -- the fixture data happened to always carry a score,
+    # so it only surfaced once the graph runner wrote genuine steps.
+    score: float | None
     snippet: str
 
 

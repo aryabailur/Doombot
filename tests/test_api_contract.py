@@ -256,22 +256,16 @@ def test_health_response_shape():
         assert_shape(point, {"ts": (str,), "score": (float, int)}, f"HealthPoint[{index}]")
 
 
-@pytest.mark.xfail(
-    reason="fixture phase returns a fixture for any id; see docstring",
-    strict=False,
-)
 def test_unknown_investigation_returns_404():
     """A missing id must 404, not 200 with an empty object.
 
     The dashboard distinguishes "not found" from "found but empty"; a 200
     here would render a blank investigation instead of an error state.
 
-    EXPECTED TO FAIL during the fixture phase. api/CLAUDE.md 2 instructs
-    Stream A to return a hardcoded fixture from every route before wiring real
-    logic, so `GET /api/investigations/{anything}` legitimately returns 200
-    with the same fixture. This becomes a real assertion once the route reads
-    from SQLite -- keeping it here, visibly xfail, is how we remember to
-    check it then rather than discovering it in the demo.
+    Was xfail during the fixture phase, when every route returned the same
+    hardcoded object regardless of id. Now that the route reads SQLite this is
+    a live assertion again -- which is exactly why it was left visibly xfail
+    rather than deleted.
     """
     _require_api()
     status, _ = _get("/api/investigations/definitely-not-a-real-id")
