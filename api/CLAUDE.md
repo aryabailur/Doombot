@@ -47,11 +47,12 @@ demo-day crash.
 | GET | `/api/health` | — | `{status: "ok"}` | A | Liveness only, no DB touch |
 | GET | `/api/repos` | — | `[RepoSummary]` | A | `{repo_name, health_score, open_investigations, last_scan}` |
 | POST | `/api/repos/{owner}/{repo}/index` | — | `IndexJobResponse` | A | `{job_id, status}`; triggers RAG indexing (async/background) |
-| GET | `/api/repos/{owner}/{repo}/health` | — | `HealthResponse` | A | `{score, breakdown, history}` |
+| GET | `/api/repos/{owner}/{repo}/health` | — | `HealthResponse` | A | `{score, breakdown, history, measured, issue_count}`; `measured: false` means no issues to score — render `--`, not the number |
 | POST | `/api/investigations` | `CreateInvestigationRequest` | `{investigation_id: str}` | A | `{repo_name, kind: "issue"|"pr", number}`; runs graph in background |
-| GET | `/api/investigations` | — | `[InvestigationSummary]` | A | List, newest first |
+| GET | `/api/investigations` | — | `[InvestigationSummary]` | A | List, newest first; `?repo_name=` scopes to one repo |
 | GET | `/api/investigations/{id}` | — | `InvestigationDetail` | A | Detail + `steps[]` replayed from SQLite |
-| GET | `/api/escalations` | — | `[Escalation]` | A | `{investigation_id, reason, severity, number, title, created_at}` |
+| GET | `/api/escalations` | — | `[Escalation]` | A | `{investigation_id, reason, severity, number, title, created_at}`; `?repo_name=` scopes to one repo |
+| POST | `/api/repos/{owner}/{repo}/scan` | — | `{repo_name, queued[], skipped_already_investigated}` | A | Investigates open issues, `?limit=` 1–25 (default 5); 502 if the repo cannot be read |
 | POST | `/api/feedback` | `FeedbackRequest` | `{ok: true}` | A | `{investigation_id, step_id?, verdict: "up"|"down", note?}`; logged only, does not alter agent behavior |
 | GET | `/api/brief/{owner}/{repo}` | — | `BriefResponse` | A | `{markdown, generated_at}` |
 | WS | `/ws` | — | event envelope stream | A | See §5 |
@@ -160,6 +161,8 @@ class HealthResponse(BaseModel):
     score: float
     breakdown: HealthBreakdown
     history: list[HealthPoint]
+    measured: bool = True      # False when the repo has no issues to score
+    issue_count: int = 0
 
 class RepoSummary(BaseModel):
     repo_name: str

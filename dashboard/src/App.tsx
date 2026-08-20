@@ -169,6 +169,7 @@ function OverviewPage({ repoName }: { repoName: string }) {
         {health.data ? (
           <HealthScoreCard
             components={toComponents(health.data)}
+            measured={health.data.measured}
             overallScore={health.data.score}
           />
         ) : (

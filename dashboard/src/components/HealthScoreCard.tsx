@@ -11,6 +11,11 @@ import { cn } from '@/lib/utils'
 export interface HealthScoreCardProps {
   overallScore: number
   components: HealthComponentScore[]
+  /**
+   * False when the repository has no issues to score. Defaults to true so
+   * existing callers are unaffected.
+   */
+  measured?: boolean
   trend?: 'up' | 'down' | 'flat'
   onViewBreakdown?: () => void
   className?: string
@@ -40,12 +45,17 @@ const trendMeta = {
 export function HealthScoreCard({
   overallScore,
   components,
+  measured = true,
   trend,
   onViewBreakdown,
   className,
 }: HealthScoreCardProps) {
   const clamped = Math.max(0, Math.min(100, Math.round(overallScore)))
   const band = scoreBand(clamped)
+  // An unmeasured repository must not display a score. Three of the four
+  // sub-scores return 100 for an empty backlog, so rendering the number would
+  // claim perfect health for a repository nothing has been read from.
+  const unmeasured = measured === false
   const trendInfo = trend ? trendMeta[trend] : null
   const TrendIcon = trendInfo?.icon
 
@@ -87,13 +97,23 @@ export function HealthScoreCard({
       </div>
 
       <div className="flex items-end gap-3">
-        <p className={cn('text-4xl font-semibold tabular-nums', band.text)}>
-          {clamped}
+        <p
+          className={cn(
+            'text-4xl font-semibold tabular-nums',
+            unmeasured ? 'text-text-muted' : band.text,
+          )}
+        >
+          {unmeasured ? '--' : clamped}
         </p>
         <div className="flex flex-col gap-0.5 pb-1">
           <span className="text-xs text-text-muted">out of 100</span>
-          <span className={cn('text-xs font-medium', band.text)}>
-            {band.label}
+          <span
+            className={cn(
+              'text-xs font-medium',
+              unmeasured ? 'text-text-muted' : band.text,
+            )}
+          >
+            {unmeasured ? 'no issues to measure' : band.label}
           </span>
         </div>
         {trendInfo && TrendIcon ? (
@@ -109,7 +129,12 @@ export function HealthScoreCard({
         ) : null}
       </div>
 
-      {components.length > 0 ? (
+      {unmeasured ? (
+        <p className="text-xs leading-5 text-text-muted">
+          This repository has no issues, so there is nothing to score. Health
+          appears once Doombot has issues to read.
+        </p>
+      ) : components.length > 0 ? (
         <HealthMetricBreakdown compact components={components} />
       ) : (
         <p className="text-xs text-text-muted">
