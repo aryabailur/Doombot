@@ -9,6 +9,7 @@ import {
 import { Activity, Radio, Search, TriangleAlert } from 'lucide-react'
 
 import { InvestigationStep } from '@/components/InvestigationStep'
+import { WS_URL } from '@/lib/api'
 import type { StepRecord } from '@/lib/types'
 import {
   useSocket,
@@ -25,7 +26,10 @@ export interface InvestigationTraceProps {
   onResync?: () => Promise<StepRecord[]>
 }
 
-const DEFAULT_WS_URL = 'ws://localhost:8000/ws'
+// Falls back to the shared, API_BASE-derived socket URL so this component
+// cannot drift from the host the REST calls use. VITE_WS_URL still wins for
+// the case where the socket really is served from somewhere else.
+const DEFAULT_WS_URL = WS_URL
 
 function sortSteps(steps: StepRecord[]): StepRecord[] {
   return [...steps].sort(

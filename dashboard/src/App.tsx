@@ -41,12 +41,11 @@ import {
   listEscalations,
   listInvestigations,
   postFeedback,
+  WS_URL,
 } from '@/lib/api'
 import type { Escalation, HealthResponse } from '@/lib/types'
 import { useApiData } from '@/lib/useApiData'
 import { useSocket } from '@/lib/useSocket'
-
-const WS_URL = 'ws://localhost:8000/ws'
 
 /** Split "owner/repo" for the path-segmented endpoints. */
 function splitRepo(full: string): [string, string] {
