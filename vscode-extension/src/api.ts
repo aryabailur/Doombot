@@ -22,7 +22,9 @@ export interface Escalation {
 }
 
 export interface InvestigationSummary {
-  id: string
+  // `investigation_id`, not `id` -- api/CLAUDE.md's InvestigationSummary.
+  // Caught by tests/test_api_contract.py after this was written wrong.
+  investigation_id: string
   repo_name: string
   kind: string
   number: number
