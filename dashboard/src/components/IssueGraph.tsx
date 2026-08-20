@@ -97,6 +97,24 @@ const categoryLabel: Record<GraphCategory, string> = {
   open: 'Open',
 }
 
+/**
+ * Stable key for an issue link, regardless of simulation state.
+ *
+ * The force simulation mutates its input, replacing each link's
+ * `source`/`target` *string* with a reference to the node object itself. Any
+ * comparison made after the first tick therefore has to normalize -- missing
+ * this meant every key lookup missed and hovering dimmed the entire graph
+ * instead of lighting one neighbourhood.
+ */
+function issueLinkKey(link: {
+  source: string | { id: string }
+  target: string | { id: string }
+}): string {
+  const from = typeof link.source === 'string' ? link.source : link.source.id
+  const to = typeof link.target === 'string' ? link.target : link.target.id
+  return `${from}->${to}`
+}
+
 /** Runtimes the code graph assigns, in a stable display order. */
 const RUNTIMES = ['python', 'server', 'browser', 'shared'] as const
 
@@ -607,7 +625,7 @@ function IssueRelationshipGraph({
             const link = raw as GraphLink
             const dim =
               neighbourhood &&
-              !neighbourhood.edges.has(`${link.source}->${link.target}`)
+              !neighbourhood.edges.has(issueLinkKey(link))
             if (dim) {
               return token('--surface-2')
             }
@@ -626,7 +644,7 @@ function IssueRelationshipGraph({
           linkDirectionalParticles={(raw) => {
             const link = raw as GraphLink
             if (neighbourhood) {
-              return neighbourhood.edges.has(`${link.source}->${link.target}`)
+              return neighbourhood.edges.has(issueLinkKey(link))
                 ? 3
                 : 0
             }
@@ -645,7 +663,7 @@ function IssueRelationshipGraph({
             const link = raw as GraphLink
             const dim =
               neighbourhood &&
-              !neighbourhood.edges.has(`${link.source}->${link.target}`)
+              !neighbourhood.edges.has(issueLinkKey(link))
             return (dim ? 0.4 : 0.9) + link.score * (dim ? 0.6 : 2.4)
           }}
           nodeCanvasObject={
@@ -1192,13 +1210,24 @@ function CodeGraphExplorer({
     return { nodeIds, linkKeys, incoming, outgoing }
   }, [focusId, graph.links])
 
-  /** Is this link inside the focused neighbourhood? */
+  /**
+   * Is this link inside the focused neighbourhood?
+   *
+   * The endpoints must go through `endpointId`. The force simulation mutates
+   * its input, replacing each link's `source`/`target` *string* with a
+   * reference to the node object itself. Comparing the raw value against a
+   * string key therefore missed on every link once the simulation had run --
+   * which dimmed the entire graph on hover instead of lighting one
+   * neighbourhood. `endpointId` already exists for exactly this hazard and is
+   * how the rest of this component reads a link's ends.
+   */
   const linkFocus = useCallback(
-    (link: CodeGraphLink): 'on' | 'dim' | undefined => {
+    (link: MutableCodeLink): 'on' | 'dim' | undefined => {
       if (!focus) {
         return undefined
       }
-      return focus.linkKeys.has(`${link.source}->${link.target}`) ? 'on' : 'dim'
+      const key = `${endpointId(link.source)}->${endpointId(link.target)}`
+      return focus.linkKeys.has(key) ? 'on' : 'dim'
     },
     [focus],
   )
@@ -1549,7 +1578,7 @@ function CodeGraphExplorer({
                   linkColor={(raw) =>
                     codeLinkColour(
                       raw as CodeGraphLink,
-                      linkFocus(raw as CodeGraphLink),
+                      linkFocus(raw as MutableCodeLink),
                     )
                   }
                   linkDirectionalArrowLength={(raw) =>
@@ -1562,7 +1591,7 @@ function CodeGraphExplorer({
                     if (reducedMotion) {
                       return 0
                     }
-                    const state = linkFocus(raw as CodeGraphLink)
+                    const state = linkFocus(raw as MutableCodeLink)
                     if (state === 'on') {
                       return 4
                     }
@@ -1573,7 +1602,7 @@ function CodeGraphExplorer({
                   }}
                   linkOpacity={focus ? 0.9 : 0.7}
                   linkWidth={(raw) => {
-                    const state = linkFocus(raw as CodeGraphLink)
+                    const state = linkFocus(raw as MutableCodeLink)
                     if (state === 'on') {
                       return 3
                     }
@@ -1614,20 +1643,20 @@ function CodeGraphExplorer({
                   linkColor={(raw) =>
                     codeLinkColour(
                       raw as CodeGraphLink,
-                      linkFocus(raw as CodeGraphLink),
+                      linkFocus(raw as MutableCodeLink),
                     )
                   }
                   linkDirectionalArrowLength={(raw) =>
                     (raw as CodeGraphLink).edge_type === 'calls' ? 2 : 4
                   }
                   linkDirectionalParticles={(raw) =>
-                    !reducedMotion && linkFocus(raw as CodeGraphLink) === 'on'
+                    !reducedMotion && linkFocus(raw as MutableCodeLink) === 'on'
                       ? 4
                       : 0
                   }
                   linkDirectionalParticleWidth={2.5}
                   linkWidth={(raw) => {
-                    const state = linkFocus(raw as CodeGraphLink)
+                    const state = linkFocus(raw as MutableCodeLink)
                     if (state === 'on') {
                       return 3
                     }
