@@ -13,6 +13,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { Button } from '@/components/ui/button'
 import { SkeletonState } from '@/components/SkeletonState'
 import type {
+  CodeGraphEdgeType,
   CodeGraphLink,
   CodeGraphNode,
   CodeGraphResponse,
@@ -784,14 +785,29 @@ function codeNodeColour(node: CodeGraphNode, clusters: string[]): string {
   return token(clusterToken(node.cluster_label, clusters))
 }
 
-function codeLinkColour(link: CodeGraphLink): string {
+/**
+ * Link colour for the code graph.
+ *
+ * The default edge used `--border` (#24332a), a near-black green-grey chosen
+ * for 1px dividers against a surface -- on the graph's #070a08 canvas it was
+ * effectively invisible, so the dependencies the graph exists to show could
+ * not be seen at all. `--text-muted` (#87958c) is the dimmest token that is
+ * still legible on that background.
+ *
+ * `dim` fades everything outside a focused neighbourhood instead of hiding it,
+ * so the surrounding structure stays as context.
+ */
+function codeLinkColour(link: CodeGraphLink, focus?: 'on' | 'dim'): string {
+  if (focus === 'dim') {
+    return token('--border')
+  }
   if (link.edge_type === 'http_calls') {
     return token('--accent-bright')
   }
   if (link.edge_type === 'renders') {
     return token('--information')
   }
-  return token('--border')
+  return focus === 'on' ? token('--accent-bright') : token('--text-muted')
 }
 
 function impactLabel(node: CodeGraphNode): string {
@@ -853,14 +869,79 @@ function GraphDatum({ label, value }: { label: string; value: string }) {
   )
 }
 
+/**
+ * The symbols one hop from `nodeId`, in one direction, as a selectable list.
+ */
+function CodeNeighbourList({
+  graph,
+  nodeId,
+  direction,
+  onSelect,
+}: {
+  graph: CodeGraphResponse
+  nodeId: string
+  direction: 'incoming' | 'outgoing'
+  onSelect?: (node: CodeGraphNode) => void
+}) {
+  const rows = graph.links
+    .filter((link) =>
+      direction === 'incoming' ? link.target === nodeId : link.source === nodeId,
+    )
+    .map((link) => {
+      const otherId = direction === 'incoming' ? link.source : link.target
+      return {
+        edge: link.edge_type,
+        node: graph.nodes.find((candidate) => candidate.id === otherId),
+      }
+    })
+    .filter(
+      (row): row is { edge: CodeGraphEdgeType; node: CodeGraphNode } =>
+        row.node !== undefined,
+    )
+
+  if (rows.length === 0) {
+    return null
+  }
+
+  return (
+    <div className="mt-4">
+      <p className="text-[11px] uppercase tracking-wide text-text-muted">
+        {direction === 'incoming'
+          ? `Called by (${rows.length})`
+          : `Depends on (${rows.length})`}
+      </p>
+      <ul className="mt-1.5 flex flex-col gap-1">
+        {rows.map((row) => (
+          <li key={`${direction}-${row.node.id}-${row.edge}`}>
+            <button
+              className="flex w-full items-baseline justify-between gap-2 rounded border border-transparent px-1.5 py-1 text-left hover:border-border hover:bg-background"
+              onClick={() => onSelect?.(row.node)}
+              type="button"
+            >
+              <span className="break-all font-mono text-xs text-text-primary">
+                {row.node.symbol_name}
+              </span>
+              <span className="shrink-0 text-[10px] uppercase tracking-wide text-text-muted">
+                {row.edge.replace('_', ' ')}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
 function GraphInspector({
   graph,
   node,
   link,
+  onSelectNode,
 }: {
   graph: CodeGraphResponse
   node: CodeGraphNode | null
   link: CodeGraphLink | null
+  onSelectNode?: (node: CodeGraphNode) => void
 }) {
   if (node) {
     return (
@@ -883,6 +964,26 @@ function GraphInspector({
           <GraphDatum label="Incoming" value={String(node.in_degree)} />
           <GraphDatum label="Outgoing" value={String(node.out_degree)} />
         </dl>
+
+        {/*
+          The degree counts alone tell you a symbol has six callers without
+          naming one of them, which leaves the obvious next question --
+          "called by what?" -- answerable only by hunting the canvas. Listing
+          the actual neighbours makes the panel answer it directly, and each
+          row selects that symbol so the list doubles as navigation.
+        */}
+        <CodeNeighbourList
+          direction="incoming"
+          graph={graph}
+          nodeId={node.id}
+          onSelect={onSelectNode}
+        />
+        <CodeNeighbourList
+          direction="outgoing"
+          graph={graph}
+          nodeId={node.id}
+          onSelect={onSelectNode}
+        />
       </aside>
     )
   }
@@ -977,6 +1078,7 @@ function CodeGraphExplorer({
    */
   const [minDegree, setMinDegree] = useState(2)
   const [selectedNode, setSelectedNode] = useState<CodeGraphNode | null>(null)
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null)
   const [selectedLink, setSelectedLink] = useState<CodeGraphLink | null>(null)
   const [reducedMotion, setReducedMotion] = useState(false)
 
@@ -1046,6 +1148,50 @@ function CodeGraphExplorer({
     }
   }, [dimension, graph.links, graph.nodes, minDegree, query, runtimes, subsystems])
 
+  /**
+   * The focused symbol and everything one hop from it.
+   *
+   * Hover previews, selection pins. Both feed one neighbourhood so the graph
+   * lights up the same way either way, and a selection survives the mouse
+   * leaving the canvas -- otherwise the detail panel describes a node whose
+   * links are no longer highlighted.
+   */
+  const focusId = hoveredNodeId ?? selectedNode?.id ?? null
+
+  const focus = useMemo(() => {
+    if (!focusId) {
+      return null
+    }
+    const nodeIds = new Set<string>([focusId])
+    const linkKeys = new Set<string>()
+    const incoming: CodeGraphLink[] = []
+    const outgoing: CodeGraphLink[] = []
+
+    for (const link of graph.links) {
+      if (link.source === focusId) {
+        outgoing.push(link)
+        nodeIds.add(link.target)
+        linkKeys.add(`${link.source}->${link.target}`)
+      } else if (link.target === focusId) {
+        incoming.push(link)
+        nodeIds.add(link.source)
+        linkKeys.add(`${link.source}->${link.target}`)
+      }
+    }
+    return { nodeIds, linkKeys, incoming, outgoing }
+  }, [focusId, graph.links])
+
+  /** Is this link inside the focused neighbourhood? */
+  const linkFocus = useCallback(
+    (link: CodeGraphLink): 'on' | 'dim' | undefined => {
+      if (!focus) {
+        return undefined
+      }
+      return focus.linkKeys.has(`${link.source}->${link.target}`) ? 'on' : 'dim'
+    },
+    [focus],
+  )
+
   useEffect(() => {
     if (typeof window === 'undefined') {
       return
@@ -1081,6 +1227,28 @@ function CodeGraphExplorer({
       const radius = 4 + Math.min(5, node.hub_score * 8)
       const colour = codeNodeColour(node, graph.stats.clusters)
 
+      // Focus: the hovered or selected symbol and its direct dependencies stay
+      // at full contrast, everything else fades back. Nothing is hidden, so
+      // the rest of the codebase remains visible as context.
+      const inFocus = focus ? focus.nodeIds.has(node.id) : true
+      const isFocusRoot = node.id === focusId
+      ctx.globalAlpha = inFocus ? 1 : 0.12
+
+      // A halo under the focused symbol and its neighbours -- this is the
+      // "glow" that makes a selection legible in a 336-node mesh.
+      if (inFocus && focus) {
+        const spread = radius * (isFocusRoot ? 4 : 2.4)
+        const glow = ctx.createRadialGradient(x, y, radius * 0.4, x, y, spread)
+        glow.addColorStop(0, isFocusRoot ? token('--accent-bright') : colour)
+        glow.addColorStop(1, 'transparent')
+        ctx.globalAlpha = isFocusRoot ? 0.55 : 0.28
+        ctx.beginPath()
+        ctx.arc(x, y, spread, 0, Math.PI * 2)
+        ctx.fillStyle = glow
+        ctx.fill()
+        ctx.globalAlpha = 1
+      }
+
       if (node.impact_status !== 'unaffected') {
         ctx.beginPath()
         ctx.arc(x, y, radius + 3, 0, Math.PI * 2)
@@ -1102,11 +1270,25 @@ function CodeGraphExplorer({
         ctx.font = `${fontSize}px ui-monospace, SFMono-Regular, monospace`
         ctx.textAlign = 'center'
         ctx.textBaseline = 'top'
+        ctx.fillStyle = isFocusRoot
+          ? token('--text-primary')
+          : token('--text-secondary')
+        ctx.fillText(node.symbol_name, x, y + radius + 2 / scale)
+      } else if (inFocus && focus) {
+        // Always label the focused neighbourhood, even when zoomed out past
+        // the usual label threshold -- naming what you are pointing at is the
+        // whole point of the interaction.
+        const fontSize = Math.min(80, Math.max(2, 11 / scale))
+        ctx.font = `${fontSize}px ui-monospace, SFMono-Regular, monospace`
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'top'
         ctx.fillStyle = token('--text-secondary')
         ctx.fillText(node.symbol_name, x, y + radius + 2 / scale)
       }
+
+      ctx.globalAlpha = 1
     },
-    [graph.stats.clusters],
+    [focus, focusId, graph.stats.clusters],
   )
 
   if (graph.nodes.length === 0) {
@@ -1328,19 +1510,44 @@ function CodeGraphExplorer({
                   enableNodeDrag={false}
                   graphData={filtered}
                   height={560}
-                  linkColor={(raw) => codeLinkColour(raw as CodeGraphLink)}
+                  linkColor={(raw) =>
+                    codeLinkColour(
+                      raw as CodeGraphLink,
+                      linkFocus(raw as CodeGraphLink),
+                    )
+                  }
                   linkDirectionalArrowLength={(raw) =>
                     (raw as CodeGraphLink).edge_type === 'calls' ? 2 : 4
                   }
-                  linkDirectionalParticles={(raw) =>
-                    reducedMotion || (raw as CodeGraphLink).edge_type === 'calls'
-                      ? 0
-                      : 2
-                  }
-                  linkOpacity={0.55}
-                  linkWidth={(raw) =>
-                    (raw as CodeGraphLink).edge_type === 'http_calls' ? 1.5 : 0.8
-                  }
+                  // Particles trace the focused neighbourhood, which is what
+                  // makes a selected symbol's dependencies read as flowing
+                  // rather than as one more static line in the mesh.
+                  linkDirectionalParticles={(raw) => {
+                    if (reducedMotion) {
+                      return 0
+                    }
+                    const state = linkFocus(raw as CodeGraphLink)
+                    if (state === 'on') {
+                      return 4
+                    }
+                    if (state === 'dim') {
+                      return 0
+                    }
+                    return (raw as CodeGraphLink).edge_type === 'calls' ? 0 : 2
+                  }}
+                  linkOpacity={focus ? 0.9 : 0.7}
+                  linkWidth={(raw) => {
+                    const state = linkFocus(raw as CodeGraphLink)
+                    if (state === 'on') {
+                      return 3
+                    }
+                    if (state === 'dim') {
+                      return 0.4
+                    }
+                    return (raw as CodeGraphLink).edge_type === 'http_calls'
+                      ? 1.5
+                      : 0.9
+                  }}
                   nodeColor={(raw) =>
                     codeNodeColour(raw as CodeGraphNode, graph.stats.clusters)
                   }
@@ -1357,6 +1564,9 @@ function CodeGraphExplorer({
                   }
                   onLinkClick={(raw) => selectLink(raw as MutableCodeLink)}
                   onNodeClick={(raw) => selectNode(raw as CodeGraphNode)}
+                  onNodeHover={(raw) =>
+                    setHoveredNodeId(raw ? (raw as CodeGraphNode).id : null)
+                  }
                   ref={graphRef as unknown as React.ComponentProps<typeof ForceGraph3D>['ref']}
                   width={canvasWidth}
                 />
@@ -1367,13 +1577,33 @@ function CodeGraphExplorer({
                   enableNodeDrag={false}
                   graphData={filtered}
                   height={560}
-                  linkColor={(raw) => codeLinkColour(raw as CodeGraphLink)}
+                  linkColor={(raw) =>
+                    codeLinkColour(
+                      raw as CodeGraphLink,
+                      linkFocus(raw as CodeGraphLink),
+                    )
+                  }
                   linkDirectionalArrowLength={(raw) =>
                     (raw as CodeGraphLink).edge_type === 'calls' ? 2 : 4
                   }
-                  linkWidth={(raw) =>
-                    (raw as CodeGraphLink).edge_type === 'http_calls' ? 1.5 : 0.8
+                  linkDirectionalParticles={(raw) =>
+                    !reducedMotion && linkFocus(raw as CodeGraphLink) === 'on'
+                      ? 4
+                      : 0
                   }
+                  linkDirectionalParticleWidth={2.5}
+                  linkWidth={(raw) => {
+                    const state = linkFocus(raw as CodeGraphLink)
+                    if (state === 'on') {
+                      return 3
+                    }
+                    if (state === 'dim') {
+                      return 0.4
+                    }
+                    return (raw as CodeGraphLink).edge_type === 'http_calls'
+                      ? 1.5
+                      : 0.9
+                  }}
                   nodeCanvasObject={
                     paintCodeNode as unknown as React.ComponentProps<
                       typeof ForceGraph2D
@@ -1388,6 +1618,9 @@ function CodeGraphExplorer({
                   }
                   onLinkClick={(raw) => selectLink(raw as MutableCodeLink)}
                   onNodeClick={(raw) => selectNode(raw as CodeGraphNode)}
+                  onNodeHover={(raw) =>
+                    setHoveredNodeId(raw ? (raw as CodeGraphNode).id : null)
+                  }
                   ref={graphRef as unknown as React.ComponentProps<typeof ForceGraph2D>['ref']}
                   width={canvasWidth}
                 />
@@ -1396,7 +1629,12 @@ function CodeGraphExplorer({
           )}
         </div>
 
-        <GraphInspector graph={graph} link={selectedLink} node={selectedNode} />
+        <GraphInspector
+          graph={graph}
+          link={selectedLink}
+          node={selectedNode}
+          onSelectNode={selectNode}
+        />
       </div>
 
       <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-text-muted">
