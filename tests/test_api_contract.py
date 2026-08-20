@@ -30,7 +30,11 @@ import urllib.request
 import pytest
 
 BASE_URL = os.getenv("DOOMBOT_API_URL", "http://localhost:8000")
-TIMEOUT = 5
+# Generous because /api/repos/{owner}/{repo}/health computes from live GitHub
+# on a cold cache -- measured at ~9s listing 100 issues. A 5s timeout made this
+# suite fail intermittently depending only on whether the API had been asked
+# recently, which is the worst kind of flake: it looks like a real regression.
+TIMEOUT = 30
 
 # --- documented shapes, transcribed from api/CLAUDE.md -----------------------
 # (field name -> accepted python types). `None` in a tuple means nullable.
