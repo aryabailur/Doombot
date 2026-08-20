@@ -119,3 +119,82 @@ def find_duplicates(issue_text: str, repo_name: str, exclude_number=None) -> dic
             related.append(item)
 
     return {"duplicates": duplicates, "related": related}
+
+
+def find_precedents(
+    issue_text: str,
+    repo_name: str,
+    exclude_number=None,
+    limit: int = 4,
+) -> list[dict]:
+    """Closed issues most like this one, with the labels a maintainer applied.
+
+    F17, adaptive repository learning. Every closed issue is a decision a human
+    already made: the labels they chose, on an issue they judged resolved. Those
+    are the project's own conventions, and they are better grounding for
+    classifying a new issue than the model's general priors.
+
+    Filtered to `state == "closed"` **in the query**, not afterwards. Chroma's
+    `filter` applies before the k nearest are chosen, so post-filtering a plain
+    top-k would usually return nothing useful -- on an active repository the
+    nearest neighbours are mostly open issues, and dropping them after the fact
+    leaves an empty list while genuinely similar closed issues sat just outside
+    k.
+
+    Only issues at or above RELATED_THRESHOLD are returned, and only those that
+    actually carry labels: an unlabelled closed issue teaches nothing about the
+    project's taxonomy, which is the entire point of the retrieval. Returns
+    newest-most-similar first, capped at `limit`.
+
+    An empty list is a normal result -- a young repository has no precedent --
+    and callers must degrade rather than invent examples.
+    """
+    # Imported from rag.graph so there is exactly one definition of "similar
+    # enough" in the project. A second literal here is how two parts of the
+    # same system start disagreeing about what a duplicate is.
+    from rag.graph import RELATED_THRESHOLD
+
+    # Over-fetch: some neighbours will be unlabelled or the issue itself, and
+    # those are dropped below.
+    raw = retrieve_with_scores(
+        issue_text,
+        repo_name,
+        kind="issues",
+        k=max(limit * 3, 12),
+    )
+
+    precedents: list[dict] = []
+    for doc, score in raw:
+        if score < RELATED_THRESHOLD:
+            continue
+
+        metadata = doc.metadata or {}
+        if str(metadata.get("state", "")).lower() != "closed":
+            continue
+
+        number = metadata.get("number")
+        if number is None or (exclude_number is not None and number == exclude_number):
+            continue
+
+        labels = [
+            label.strip()
+            for label in str(metadata.get("labels") or "").split(",")
+            if label.strip()
+        ]
+        if not labels:
+            continue
+
+        first_line = (doc.page_content or "").splitlines()[:1]
+        title = metadata.get("title") or (first_line[0] if first_line else "")
+        precedents.append(
+            {
+                "number": number,
+                "score": round(score, 3),
+                "labels": labels,
+                "title": title.strip()[:120],
+            }
+        )
+        if len(precedents) >= limit:
+            break
+
+    return precedents

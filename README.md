@@ -51,7 +51,7 @@ README says what is actually done.
 | VS Code extension | F14 | P2 | Implemented |
 | Issue relationship graph | F15 | Stretch | Implemented — live from `rag.graph` |
 | Intelligent issue resolution | F16 | Stretch | Implemented — approval-gated |
-| Adaptive repository learning | F17 | Stretch | Planned — retrieval exists, few-shot prompt does not |
+| Adaptive repository learning | F17 | Stretch | Implemented — few-shot grounded in the repo's closed issues |
 | MCP intelligence layer | F18 | Stretch | Implemented — 7 read-only tools expose Doombot's analysis |
 
 **Working today:** the issue-triage graph (`issue_fetcher → duplicate_detector
@@ -60,9 +60,7 @@ PR-review graph (`fetcher → reviewer → test_writer → summarizer`), a FastM
 stdio server over PyGithub, Chroma + MiniLM indexing, all 13 REST endpoints
 plus `/ws`, and the dashboard reading every screen from the API.
 
-**Known gaps:** F09 (incomplete-issue follow-up) and F17 (adaptive repository
-learning) are specified but not built — see
-[docs/INTELLIGENCE.md](docs/INTELLIGENCE.md) for F17.
+**Known gap:** F09 (incomplete-issue follow-up) is not built.
 
 ---
 

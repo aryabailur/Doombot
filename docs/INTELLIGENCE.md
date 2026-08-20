@@ -15,9 +15,11 @@ nothing here should be read as shipped until it is merged and demonstrated
 
 ---
 
-## F17 — Adaptive repository learning
+## F17 — Adaptive repository learning — **BUILT**
 
-**Priority: P2, stretch. Stream B. Branch: `feat/b-adaptive-learning`.**
+**Priority: P2, stretch. Stream B.** Implemented as
+`rag.retriever.find_precedents` plus the precedent prompt in
+`agents/triage/labeler.py`, guarded by `tests/test_adaptive_learning.py`.
 
 ### The idea
 

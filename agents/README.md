@@ -110,7 +110,7 @@ issue-relationship graph (F15) and the semantic code graph.
 | Approval-gated labeling (F08) | Live — `ADD_LABELS`, gated |
 | Issue + code graph (F15) | Live |
 | Resolution proposals (F16) | Live — approval-gated |
-| Adaptive repository learning (F17) | **Not built** — spec in `docs/INTELLIGENCE.md` |
+| Adaptive repository learning (F17) | Live — few-shot precedents in `agents/triage/labeler.py` |
 | MCP intelligence layer (F18) | Live — 7 read-only tools, `mcp_server/intelligence.py` |
 
 **There is no OpenAI in this project.** Groq `openai/gpt-oss-120b` for
