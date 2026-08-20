@@ -26,6 +26,8 @@ export interface HealthMetricBreakdownProps {
  * HealthScoreCard so a 62 never reads as "good" in one view and "poor" in
  * another.
  */
+// Pure scoring helper shared with the summary card and focused tests.
+// eslint-disable-next-line react-refresh/only-export-components
 export function scoreBand(score: number): {
   label: string
   bar: string

@@ -7,11 +7,20 @@ import {
   useRef,
   useState,
 } from 'react'
-import { Network } from 'lucide-react'
+import { Box, Code2, GitBranch, Network, RotateCcw, Search } from 'lucide-react'
 
 import { EmptyState } from '@/components/EmptyState'
 import { Button } from '@/components/ui/button'
 import { SkeletonState } from '@/components/SkeletonState'
+import type {
+  CodeGraphLink,
+  CodeGraphNode,
+  CodeGraphResponse,
+  IssueGraphCategory,
+  IssueGraphLink,
+  IssueGraphLinkKind,
+  IssueGraphNode,
+} from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 /**
@@ -24,6 +33,7 @@ import { cn } from '@/lib/utils'
  * five routes never need it.
  */
 const ForceGraph2D = lazy(() => import('react-force-graph-2d'))
+const ForceGraph3D = lazy(() => import('react-force-graph-3d'))
 
 /**
  * The library types graph nodes as its own loose `NodeObject` (an index
@@ -38,38 +48,17 @@ type GraphHandle = {
   d3Force: (name: string) => { strength?: (v: number) => void; distance?: (v: number) => void } | undefined
 }
 
-export type GraphCategory =
-  | 'security'
-  | 'duplicate'
-  | 'stale'
-  | 'resolved'
-  | 'open'
-
-export type GraphLinkKind = 'duplicate' | 'similar' | 'reference' | 'metadata'
-
-export interface GraphNode {
-  id: string
-  number: number
-  title: string
-  category: GraphCategory
-  state: string
-  labels: string[]
-  engagement: number
-  escalated: boolean
-}
-
-export interface GraphLink {
-  source: string
-  target: string
-  kind: GraphLinkKind
-  score: number
-  why: string
-}
+export type GraphCategory = IssueGraphCategory
+export type GraphLinkKind = IssueGraphLinkKind
+export type GraphNode = IssueGraphNode
+export type GraphLink = IssueGraphLink
 
 export interface IssueGraphProps {
-  nodes: GraphNode[]
-  links: GraphLink[]
+  nodes?: GraphNode[]
+  links?: GraphLink[]
+  codeGraph?: CodeGraphResponse
   onSelectIssue?: (node: GraphNode) => void
+  onSelectCode?: (node: CodeGraphNode) => void
   className?: string
 }
 
@@ -142,12 +131,34 @@ const ALL_CATEGORIES: GraphCategory[] = [
  * number on the canvas, the legend names each category in text, and clicking
  * an edge reports the reason it exists.
  */
-export function IssueGraph({
+export function IssueGraph(props: IssueGraphProps) {
+  if (props.codeGraph) {
+    return (
+      <CodeGraphExplorer
+        className={props.className}
+        graph={props.codeGraph}
+        onSelectCode={props.onSelectCode}
+      />
+    )
+  }
+
+  return (
+    <IssueRelationshipGraph
+      className={props.className}
+      links={props.links ?? []}
+      nodes={props.nodes ?? []}
+      onSelectIssue={props.onSelectIssue}
+    />
+  )
+}
+
+function IssueRelationshipGraph({
   nodes,
   links,
   onSelectIssue,
   className,
-}: IssueGraphProps) {
+}: Required<Pick<IssueGraphProps, 'nodes' | 'links'>> &
+  Pick<IssueGraphProps, 'onSelectIssue' | 'className'>) {
   // Structural type rather than the library's ForceGraphMethods, which is
   // only reachable through the lazily-imported module.
   const graphRef = useRef<GraphHandle | null>(null)
@@ -385,6 +396,587 @@ export function IssueGraph({
                     (link) => link.source === node.id || link.target === node.id,
                   )
                   .map((link) => link.why)
+                  .join('; ') || 'none'}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  )
+}
+
+type SimCodeNode = CodeGraphNode & {
+  x?: number
+  y?: number
+  z?: number
+  fx?: number
+  fy?: number
+  fz?: number
+}
+
+type MutableCodeLink = Omit<CodeGraphLink, 'source' | 'target'> & {
+  source: string | SimCodeNode
+  target: string | SimCodeNode
+}
+
+const clusterTokens = [
+  '--accent',
+  '--information',
+  '--warning',
+  '--high',
+  '--neutral',
+  '--success',
+] as const
+
+const riskClasses: Record<CodeGraphResponse['impact']['risk_level'], string> = {
+  low: 'border-information/30 bg-information/10 text-information',
+  medium: 'border-warning/30 bg-warning/10 text-warning',
+  high: 'border-high/30 bg-high/10 text-high',
+  critical: 'border-critical/30 bg-critical/10 text-critical',
+}
+
+const edgeLabels: Record<CodeGraphLink['edge_type'], string> = {
+  calls: 'Calls',
+  renders: 'Renders',
+  http_calls: 'HTTP call',
+}
+
+function endpointId(endpoint: MutableCodeLink['source']): string {
+  return typeof endpoint === 'string' ? endpoint : endpoint.id
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;')
+}
+
+function clusterToken(cluster: string, clusters: string[]): string {
+  const index = Math.max(0, clusters.indexOf(cluster)) % clusterTokens.length
+  return clusterTokens[index]
+}
+
+function codeNodeColour(node: CodeGraphNode, clusters: string[]): string {
+  if (node.impact_status === 'changed') {
+    return token('--critical')
+  }
+  if (node.impact_status === 'ripple') {
+    return token('--warning')
+  }
+  return token(clusterToken(node.cluster_label, clusters))
+}
+
+function codeLinkColour(link: CodeGraphLink): string {
+  if (link.edge_type === 'http_calls') {
+    return token('--accent-bright')
+  }
+  if (link.edge_type === 'renders') {
+    return token('--information')
+  }
+  return token('--border')
+}
+
+function impactLabel(node: CodeGraphNode): string {
+  if (node.impact_status === 'changed') {
+    return 'Directly changed'
+  }
+  if (node.impact_status === 'ripple') {
+    return `Ripple distance ${node.impact_distance ?? 0}`
+  }
+  return 'Unaffected'
+}
+
+function GraphMetric({
+  label,
+  value,
+  tone,
+}: {
+  label: string
+  value: number
+  tone?: 'critical' | 'warning'
+}) {
+  return (
+    <div className="rounded-lg border border-border bg-surface-2 px-3 py-2">
+      <p className="text-[11px] uppercase tracking-wide text-text-muted">{label}</p>
+      <p
+        className={cn(
+          'font-mono text-lg font-semibold text-text-primary',
+          tone === 'critical' && 'text-critical',
+          tone === 'warning' && 'text-warning',
+        )}
+      >
+        {value}
+      </p>
+    </div>
+  )
+}
+
+function GraphLegend({ label, tokenName }: { label: string; tokenName: string }) {
+  const dotClass =
+    tokenName === '--critical'
+      ? 'bg-critical'
+      : tokenName === '--warning'
+        ? 'bg-warning'
+        : 'bg-accent'
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span aria-hidden="true" className={cn('size-2 rounded-full', dotClass)} />
+      {label}
+    </span>
+  )
+}
+
+function GraphDatum({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-text-muted">{label}</dt>
+      <dd className="break-all font-mono text-text-primary">{value}</dd>
+    </div>
+  )
+}
+
+function GraphInspector({
+  graph,
+  node,
+  link,
+}: {
+  graph: CodeGraphResponse
+  node: CodeGraphNode | null
+  link: CodeGraphLink | null
+}) {
+  if (node) {
+    return (
+      <aside
+        aria-live="polite"
+        className="rounded-lg border border-border bg-surface-2 p-4"
+      >
+        <Code2 aria-hidden="true" className="mb-3 size-5 text-accent" />
+        <p className="break-all font-mono text-sm font-semibold text-text-primary">
+          {node.symbol_name}
+        </p>
+        <p className="mt-1 break-all font-mono text-xs text-text-muted">
+          {node.file_path}:{node.start_line}-{node.end_line}
+        </p>
+        <dl className="mt-4 grid grid-cols-2 gap-3 text-xs">
+          <GraphDatum label="Impact" value={impactLabel(node)} />
+          <GraphDatum label="Kind" value={node.kind} />
+          <GraphDatum label="Subsystem" value={node.cluster_label} />
+          <GraphDatum label="Language" value={node.language} />
+          <GraphDatum label="Incoming" value={String(node.in_degree)} />
+          <GraphDatum label="Outgoing" value={String(node.out_degree)} />
+        </dl>
+      </aside>
+    )
+  }
+
+  if (link) {
+    const source = graph.nodes.find((candidate) => candidate.id === link.source)
+    const target = graph.nodes.find((candidate) => candidate.id === link.target)
+    return (
+      <aside
+        aria-live="polite"
+        className="rounded-lg border border-border bg-surface-2 p-4"
+      >
+        <GitBranch aria-hidden="true" className="mb-3 size-5 text-information" />
+        <p className="text-xs font-semibold uppercase tracking-wide text-information">
+          {edgeLabels[link.edge_type]}
+        </p>
+        <p className="mt-2 break-all font-mono text-xs text-text-primary">
+          {source?.symbol_name ?? link.source}
+          <span aria-hidden="true" className="px-1 text-text-muted">
+            →
+          </span>
+          {target?.symbol_name ?? link.target}
+        </p>
+        <p className="mt-3 text-xs leading-5 text-text-secondary">{link.why}</p>
+      </aside>
+    )
+  }
+
+  const mostAffected = graph.impact.cluster_impact[0]
+  return (
+    <aside className="rounded-lg border border-border bg-surface-2 p-4">
+      <Network aria-hidden="true" className="mb-3 size-5 text-accent" />
+      <p className="text-sm font-semibold text-text-primary">Explore the graph</p>
+      <p className="mt-2 text-xs leading-5 text-text-secondary">
+        Select a symbol for file and dependency details, or a line to see why the
+        relationship exists.
+      </p>
+      {mostAffected ? (
+        <div className="mt-4 rounded-lg border border-border bg-background p-3">
+          <p className="text-[11px] uppercase tracking-wide text-text-muted">
+            Most affected subsystem
+          </p>
+          <p className="mt-1 break-all font-mono text-xs text-text-primary">
+            {mostAffected.cluster}
+          </p>
+          <p className="mt-1 text-xs text-warning">
+            {Math.round(mostAffected.impact_score * 100)}% affected
+          </p>
+        </div>
+      ) : null}
+    </aside>
+  )
+}
+
+function CodeGraphExplorer({
+  graph,
+  onSelectCode,
+  className,
+}: {
+  graph: CodeGraphResponse
+  onSelectCode?: (node: CodeGraphNode) => void
+  className?: string
+}) {
+  const graphRef = useRef<GraphHandle | null>(null)
+  const canvasRef = useRef<HTMLDivElement | null>(null)
+  const [canvasWidth, setCanvasWidth] = useState(800)
+  const [dimension, setDimension] = useState<'2d' | '3d'>('3d')
+  const [query, setQuery] = useState('')
+  const [selectedNode, setSelectedNode] = useState<CodeGraphNode | null>(null)
+  const [selectedLink, setSelectedLink] = useState<CodeGraphLink | null>(null)
+  const [reducedMotion, setReducedMotion] = useState(false)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+    const media = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const update = () => setReducedMotion(media.matches)
+    update()
+    media.addEventListener('change', update)
+    return () => media.removeEventListener('change', update)
+  }, [])
+
+  useEffect(() => {
+    if (typeof ResizeObserver === 'undefined' || !canvasRef.current) {
+      return
+    }
+    const observer = new ResizeObserver(([entry]) => {
+      const width = Math.floor(entry.contentRect.width)
+      if (width > 0) {
+        setCanvasWidth(width)
+      }
+    })
+    observer.observe(canvasRef.current)
+    return () => observer.disconnect()
+  }, [])
+
+  const filtered = useMemo(() => {
+    const normalized = query.trim().toLowerCase()
+    const nodes = normalized
+      ? graph.nodes.filter((node) =>
+          [node.symbol_name, node.qualname, node.file_path, node.cluster_label]
+            .join(' ')
+            .toLowerCase()
+            .includes(normalized),
+        )
+      : graph.nodes
+    const visibleIds = new Set(nodes.map((node) => node.id))
+    const links = graph.links.filter(
+      (link) => visibleIds.has(link.source) && visibleIds.has(link.target),
+    )
+    const scale = dimension === '3d' ? 22 : 18
+    return {
+      nodes: nodes.map((node) => {
+        const x = (dimension === '3d' ? node.x3d : node.x2d) * scale
+        const y = (dimension === '3d' ? node.y3d : node.y2d) * scale
+        const z = dimension === '3d' ? node.z3d * scale : 0
+        return { ...node, x, y, z, fx: x, fy: y, fz: z }
+      }),
+      links: links.map((link) => ({ ...link })),
+    }
+  }, [dimension, graph.links, graph.nodes, query])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+    const frame = window.setTimeout(
+      () => graphRef.current?.zoomToFit(reducedMotion ? 0 : 400, 56),
+      reducedMotion ? 0 : 120,
+    )
+    return () => window.clearTimeout(frame)
+  }, [canvasWidth, dimension, filtered.nodes.length, reducedMotion])
+
+  const selectNode = (node: CodeGraphNode) => {
+    setSelectedNode(node)
+    setSelectedLink(null)
+    onSelectCode?.(node)
+  }
+
+  const selectLink = (link: MutableCodeLink) => {
+    setSelectedLink({
+      edge_type: link.edge_type,
+      source: endpointId(link.source),
+      target: endpointId(link.target),
+      why: link.why,
+    })
+    setSelectedNode(null)
+  }
+
+  const paintCodeNode = useCallback(
+    (raw: object, ctx: CanvasRenderingContext2D, scale: number) => {
+      const node = raw as SimCodeNode
+      const x = node.x ?? 0
+      const y = node.y ?? 0
+      const radius = 4 + Math.min(5, node.hub_score * 8)
+      const colour = codeNodeColour(node, graph.stats.clusters)
+
+      if (node.impact_status !== 'unaffected') {
+        ctx.beginPath()
+        ctx.arc(x, y, radius + 3, 0, Math.PI * 2)
+        ctx.strokeStyle = colour
+        ctx.lineWidth = 1.5 / scale
+        ctx.stroke()
+      }
+
+      ctx.beginPath()
+      ctx.arc(x, y, radius, 0, Math.PI * 2)
+      ctx.fillStyle = colour
+      ctx.fill()
+
+      if (scale > 0.65 || node.impact_status !== 'unaffected') {
+        // Canvas text is transformed with the graph. Inverse scaling keeps a
+        // symbol label close to 11 screen pixels even when a search result is
+        // zoomed in, instead of expanding it to headline size.
+        const fontSize = Math.min(80, Math.max(2, 11 / scale))
+        ctx.font = `${fontSize}px ui-monospace, SFMono-Regular, monospace`
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'top'
+        ctx.fillStyle = token('--text-secondary')
+        ctx.fillText(node.symbol_name, x, y + radius + 2 / scale)
+      }
+    },
+    [graph.stats.clusters],
+  )
+
+  if (graph.nodes.length === 0) {
+    return (
+      <EmptyState
+        description="Index the repository to map symbols and their dependencies."
+        icon={Code2}
+        title="No code graph data yet"
+      />
+    )
+  }
+
+  const changedCount = graph.nodes.filter(
+    (node) => node.impact_status === 'changed',
+  ).length
+  const rippleCount = graph.nodes.filter(
+    (node) => node.impact_status === 'ripple',
+  ).length
+
+  return (
+    <section
+      aria-label="Repository semantic code graph"
+      className={cn(
+        'flex flex-col gap-4 rounded-xl border border-border bg-surface-1 p-4',
+        className,
+      )}
+    >
+      <div className="flex flex-wrap items-start gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <Box aria-hidden="true" className="size-5 text-accent" />
+          <div className="min-w-0">
+            <h2 className="truncate text-sm font-semibold uppercase tracking-wide text-text-secondary">
+              Semantic code graph
+            </h2>
+            <p className="truncate font-mono text-xs text-text-muted">
+              {graph.repository}
+            </p>
+          </div>
+        </div>
+        <span
+          className={cn(
+            'rounded-full border px-2 py-1 text-xs font-semibold uppercase tracking-wide',
+            riskClasses[graph.impact.risk_level],
+          )}
+        >
+          {graph.impact.risk_level} risk
+        </span>
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <Button
+            aria-label={`Switch to ${dimension === '3d' ? '2D' : '3D'} graph`}
+            onClick={() => setDimension((value) => (value === '3d' ? '2d' : '3d'))}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            {dimension === '3d' ? <Network /> : <Box />}
+            {dimension === '3d' ? '2D view' : '3D view'}
+          </Button>
+          <Button
+            onClick={() => graphRef.current?.zoomToFit(reducedMotion ? 0 : 400, 56)}
+            size="sm"
+            type="button"
+            variant="ghost"
+          >
+            <RotateCcw />
+            Reset view
+          </Button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+        <GraphMetric label="Symbols" value={graph.stats.node_count} />
+        <GraphMetric label="Dependencies" value={graph.stats.link_count} />
+        <GraphMetric label="Subsystems" value={graph.stats.cluster_count} />
+        <GraphMetric label="Changed" tone="critical" value={changedCount} />
+        <GraphMetric label="Ripple" tone="warning" value={rippleCount} />
+        <GraphMetric label="Languages" value={graph.stats.languages.length} />
+      </div>
+
+      <label className="relative block max-w-xl">
+        <span className="sr-only">Search symbols, files, or subsystems</span>
+        <Search
+          aria-hidden="true"
+          className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-text-muted"
+        />
+        <input
+          className="h-9 w-full rounded-lg border border-border bg-background pl-9 pr-3 text-sm text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none"
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search symbols, files, or subsystems"
+          type="search"
+          value={query}
+        />
+      </label>
+
+      <div className="grid min-h-[560px] gap-3 xl:grid-cols-[minmax(0,1fr)_280px]">
+        <div
+          className="h-[560px] min-w-0 overflow-hidden rounded-lg border border-border bg-background"
+          ref={canvasRef}
+        >
+          {filtered.nodes.length === 0 ? (
+            <EmptyState
+              className="h-full"
+              description="Try a symbol, file path, or subsystem name."
+              icon={Search}
+              title="No matching symbols"
+            />
+          ) : (
+            <Suspense fallback={<SkeletonState className="p-4" variant="card" />}>
+              {dimension === '3d' ? (
+                <ForceGraph3D
+                  backgroundColor={token('--background')}
+                  cooldownTicks={1}
+                  enableNodeDrag={false}
+                  graphData={filtered}
+                  height={560}
+                  linkColor={(raw) => codeLinkColour(raw as CodeGraphLink)}
+                  linkDirectionalArrowLength={(raw) =>
+                    (raw as CodeGraphLink).edge_type === 'calls' ? 2 : 4
+                  }
+                  linkDirectionalParticles={(raw) =>
+                    reducedMotion || (raw as CodeGraphLink).edge_type === 'calls'
+                      ? 0
+                      : 2
+                  }
+                  linkOpacity={0.55}
+                  linkWidth={(raw) =>
+                    (raw as CodeGraphLink).edge_type === 'http_calls' ? 1.5 : 0.8
+                  }
+                  nodeColor={(raw) =>
+                    codeNodeColour(raw as CodeGraphNode, graph.stats.clusters)
+                  }
+                  nodeLabel={(raw) => {
+                    const node = raw as CodeGraphNode
+                    return `<strong>${escapeHtml(node.symbol_name)}</strong><br>${escapeHtml(node.file_path)}:${node.start_line}<br>${escapeHtml(impactLabel(node))}`
+                  }}
+                  nodeOpacity={0.92}
+                  nodeVal={(raw) =>
+                    3 + Math.min(10, (raw as CodeGraphNode).hub_score * 14)
+                  }
+                  onEngineStop={() =>
+                    graphRef.current?.zoomToFit(reducedMotion ? 0 : 400, 56)
+                  }
+                  onLinkClick={(raw) => selectLink(raw as MutableCodeLink)}
+                  onNodeClick={(raw) => selectNode(raw as CodeGraphNode)}
+                  ref={graphRef as unknown as React.ComponentProps<typeof ForceGraph3D>['ref']}
+                  width={canvasWidth}
+                />
+              ) : (
+                <ForceGraph2D
+                  backgroundColor="transparent"
+                  cooldownTicks={1}
+                  enableNodeDrag={false}
+                  graphData={filtered}
+                  height={560}
+                  linkColor={(raw) => codeLinkColour(raw as CodeGraphLink)}
+                  linkDirectionalArrowLength={(raw) =>
+                    (raw as CodeGraphLink).edge_type === 'calls' ? 2 : 4
+                  }
+                  linkWidth={(raw) =>
+                    (raw as CodeGraphLink).edge_type === 'http_calls' ? 1.5 : 0.8
+                  }
+                  nodeCanvasObject={
+                    paintCodeNode as unknown as React.ComponentProps<
+                      typeof ForceGraph2D
+                    >['nodeCanvasObject']
+                  }
+                  nodeLabel={(raw) => {
+                    const node = raw as CodeGraphNode
+                    return `${node.symbol_name} — ${node.file_path}:${node.start_line} — ${impactLabel(node)}`
+                  }}
+                  onEngineStop={() =>
+                    graphRef.current?.zoomToFit(reducedMotion ? 0 : 400, 56)
+                  }
+                  onLinkClick={(raw) => selectLink(raw as MutableCodeLink)}
+                  onNodeClick={(raw) => selectNode(raw as CodeGraphNode)}
+                  ref={graphRef as unknown as React.ComponentProps<typeof ForceGraph2D>['ref']}
+                  width={canvasWidth}
+                />
+              )}
+            </Suspense>
+          )}
+        </div>
+
+        <GraphInspector graph={graph} link={selectedLink} node={selectedNode} />
+      </div>
+
+      <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-text-muted">
+        <GraphLegend label="Directly changed" tokenName="--critical" />
+        <GraphLegend label="Dependency ripple" tokenName="--warning" />
+        <GraphLegend label="Subsystem colour" tokenName="--accent" />
+        <span>Sphere size represents dependency centrality.</span>
+      </div>
+
+      <p className="text-xs text-text-muted">
+        {graph.stats.attribution} Impact follows dependencies in both directions to
+        depth two; high-degree hubs are suppressed to avoid noisy false alarms.
+      </p>
+
+      <table className="sr-only">
+        <caption>Repository symbols and dependencies</caption>
+        <thead>
+          <tr>
+            <th scope="col">Symbol</th>
+            <th scope="col">File</th>
+            <th scope="col">Subsystem</th>
+            <th scope="col">Impact</th>
+            <th scope="col">Dependencies</th>
+          </tr>
+        </thead>
+        <tbody>
+          {graph.nodes.map((node) => (
+            <tr key={node.id}>
+              <td>{node.qualname}</td>
+              <td>
+                {node.file_path}:{node.start_line}-{node.end_line}
+              </td>
+              <td>{node.cluster_label}</td>
+              <td>{impactLabel(node)}</td>
+              <td>
+                {graph.links
+                  .filter(
+                    (link) => link.source === node.id || link.target === node.id,
+                  )
+                  .map((link) => `${edgeLabels[link.edge_type]}: ${link.why}`)
                   .join('; ') || 'none'}
               </td>
             </tr>

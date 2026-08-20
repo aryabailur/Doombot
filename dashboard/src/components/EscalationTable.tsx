@@ -55,6 +55,8 @@ const ALL_SEVERITIES: EscalationSeverity[] = [
   'info',
 ]
 
+// Pure queue helpers are exported for focused tests; they do not carry React state.
+// eslint-disable-next-line react-refresh/only-export-components
 export function applyFilters(
   rows: EscalationRow[],
   filters: EscalationFilters,
@@ -80,6 +82,7 @@ export function applyFilters(
 }
 
 /** Severity first, then confidence. The most urgent, best-evidenced item leads. */
+// eslint-disable-next-line react-refresh/only-export-components
 export function sortRows(rows: EscalationRow[]): EscalationRow[] {
   return [...rows].sort((a, b) => {
     const bySeverity = SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]

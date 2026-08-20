@@ -1,7 +1,4 @@
 import type {
-  GraphLink,
-  GraphNode,
-  GraphStats,
   RepoSummary,
   HealthResponse,
   InvestigationSummary,
@@ -10,7 +7,9 @@ import type {
   CreateInvestigationRequest,
   FeedbackRequest,
   BriefResponse,
+  CodeGraphResponse,
   IndexJobResponse,
+  IssueGraphResponse,
 } from "./types";
 import {
   mockRepos,
@@ -19,6 +18,8 @@ import {
   mockInvestigationDetail,
   mockEscalations,
   mockBrief,
+  mockCodeGraph,
+  mockIssueGraph,
 } from "./mocks";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
@@ -93,24 +94,28 @@ export function postFeedback(req: FeedbackRequest): Promise<{ ok: boolean }> {
   return request("/api/feedback", { method: "POST", body: JSON.stringify(req) });
 }
 
-/**
- * Issue relationship graph (F15).
- *
- * Not in Stream A's original client because the endpoint was added later.
- * Returns the same {nodes, links} shape `rag.graph.build_graph` produces, so
- * IssueGraph consumes it without a mapping layer.
- */
-export function getRepoGraph(
-  owner: string,
-  repo: string,
-): Promise<{ nodes: GraphNode[]; links: GraphLink[]; stats: GraphStats }> {
-  if (USE_MOCKS) {
-    return delay().then(() => ({ nodes: [], links: [], stats: {} as GraphStats }));
-  }
-  return request(`/api/repos/${owner}/${repo}/graph`);
-}
-
 export function getBrief(owner: string, repo: string): Promise<BriefResponse> {
   if (USE_MOCKS) return delay().then(() => mockBrief);
   return request(`/api/brief/${owner}/${repo}`);
+}
+
+export function getIssueGraph(
+  owner: string,
+  repo: string,
+): Promise<IssueGraphResponse> {
+  if (USE_MOCKS) return delay().then(() => mockIssueGraph);
+  return request(`/api/repos/${owner}/${repo}/graph`);
+}
+
+export function getCodeGraph(
+  owner: string,
+  repo: string,
+  changedPaths: string[] = [],
+): Promise<CodeGraphResponse> {
+  if (USE_MOCKS) return delay().then(() => mockCodeGraph);
+  const params = new URLSearchParams();
+  for (const path of changedPaths) params.append("changed_path", path);
+  const encoded = params.toString();
+  const query = encoded ? `?${encoded}` : "";
+  return request(`/api/repos/${owner}/${repo}/code-graph${query}`);
 }

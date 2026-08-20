@@ -34,7 +34,7 @@ import { RepositorySelector } from '@/components/RepositorySelector'
 import { SkeletonState } from '@/components/SkeletonState'
 import {
   getInvestigation,
-  getRepoGraph,
+  getCodeGraph,
   getRepoHealth,
   getRepos,
   indexRepo,
@@ -297,25 +297,32 @@ function InvestigationDetailPage() {
   )
 }
 
+/**
+ * Semantic graph explorer (F15).
+ *
+ * Renders the *code* graph rather than the issue graph. Their IssueGraph now
+ * accepts either shape, and the code graph carries the blast-radius overlay,
+ * which is the more compelling of the two views.
+ *
+ * Doombot's own repository opens with rag/graph.py marked as changed, so the
+ * impact overlay has something to show immediately instead of a neutral
+ * graph nobody can interpret.
+ */
 function GraphPage({ repoName }: { repoName: string }) {
-  const navigate = useNavigate()
   const [owner, repo] = splitRepo(repoName)
-  const graph = useApiData(() => getRepoGraph(owner, repo), {})
+  const changedPaths =
+    repoName.toLowerCase() === 'aryabailur/doombot' ? ['rag/graph.py'] : []
+
+  const graph = useApiData(() => getCodeGraph(owner, repo, changedPaths), {})
 
   if (graph.error && !graph.data) {
     return <ErrorState kind={graph.error} onRetry={graph.reload} />
   }
   if (!graph.data) {
-    return <SkeletonState variant="card" />
+    return <SkeletonState className="min-h-[560px]" variant="card" />
   }
 
-  return (
-    <IssueGraph
-      links={graph.data.links}
-      nodes={graph.data.nodes}
-      onSelectIssue={(node) => navigate(`/investigations/issue-${node.number}`)}
-    />
-  )
+  return <IssueGraph codeGraph={graph.data} />
 }
 
 function HealthPage({ repoName }: { repoName: string }) {

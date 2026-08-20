@@ -135,46 +135,112 @@ export interface ActivityPayload {
   severity: string;
 }
 
-/**
- * Issue relationship graph (F15), mirroring api/CLAUDE.md 14 and the output of
- * `rag.graph.build_graph`.
- *
- * `IssueGraph.tsx` declares structurally identical types for its own props.
- * They are intentionally not imported from here: the component must render
- * from fixtures with no API in play, and coupling its props to the wire
- * contract would break that.
- */
-export type GraphCategory =
+export type IssueGraphCategory =
   | "security"
   | "duplicate"
   | "stale"
   | "resolved"
   | "open";
 
-export type GraphLinkKind = "duplicate" | "similar" | "reference" | "metadata";
+export type IssueGraphLinkKind =
+  | "duplicate"
+  | "similar"
+  | "reference"
+  | "metadata";
 
-export interface GraphNode {
+export interface IssueGraphNode {
   id: string;
   number: number;
   title: string;
-  category: GraphCategory;
+  category: IssueGraphCategory;
   state: string;
   labels: string[];
   engagement: number;
   escalated: boolean;
 }
 
-export interface GraphLink {
+export interface IssueGraphLink {
   source: string;
   target: string;
-  kind: GraphLinkKind;
+  kind: IssueGraphLinkKind;
   score: number;
   why: string;
 }
 
-export interface GraphStats {
+export interface IssueGraphResponse {
+  nodes: IssueGraphNode[];
+  links: IssueGraphLink[];
+  stats: Record<string, unknown>;
+}
+
+export type CodeGraphEdgeType = "calls" | "renders" | "http_calls";
+export type CodeGraphImpactStatus = "changed" | "ripple" | "unaffected";
+
+export interface CodeGraphNode {
+  id: string;
+  qualname: string;
+  symbol_name: string;
+  file_path: string;
+  kind: string;
+  runtime: string;
+  language: string;
+  start_line: number;
+  end_line: number;
+  cluster_label: string;
+  in_degree: number;
+  out_degree: number;
+  hub_score: number;
+  x2d: number;
+  y2d: number;
+  x3d: number;
+  y3d: number;
+  z3d: number;
+  impact_status: CodeGraphImpactStatus;
+  impact_distance: number | null;
+}
+
+export interface CodeGraphLink {
+  source: string;
+  target: string;
+  edge_type: CodeGraphEdgeType;
+  why: string;
+}
+
+export interface CodeGraphImpactedUnit {
+  qualname: string;
+  distance: number;
+  edge_type: CodeGraphEdgeType;
+}
+
+export interface CodeGraphClusterImpact {
+  cluster: string;
+  impact_score: number;
+  changed_count: number;
+  ripple_count: number;
+  total_count: number;
+}
+
+export interface CodeGraphImpact {
+  risk_level: "low" | "medium" | "high" | "critical";
+  changed_units: string[];
+  impacted_units: CodeGraphImpactedUnit[];
+  cluster_impact: CodeGraphClusterImpact[];
+  suggested_labels: string[];
+}
+
+export interface CodeGraphStats {
   node_count: number;
   link_count: number;
-  duplicate_links: number;
-  by_category: Record<string, number>;
+  cluster_count: number;
+  clusters: string[];
+  languages: string[];
+  attribution: string;
+}
+
+export interface CodeGraphResponse {
+  repository: string;
+  nodes: CodeGraphNode[];
+  links: CodeGraphLink[];
+  stats: CodeGraphStats;
+  impact: CodeGraphImpact;
 }

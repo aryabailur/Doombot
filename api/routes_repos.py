@@ -18,19 +18,27 @@ from __future__ import annotations
 import asyncio
 import uuid
 from datetime import datetime, timezone
+from functools import lru_cache
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from api import health as health_service
 from api.schemas import (
     BriefResponse,
+    CodeGraphResponse,
     HealthBreakdown,
     HealthPoint,
+    GraphResponse,
     HealthResponse,
     IndexJobResponse,
     RepoSummary,
 )
 from memory import repo as store
+# Imported at module scope rather than lazily: these are pure graph builders
+# over already-indexed data, so they pull in no model and cost nothing to
+# import. The lazy imports elsewhere in this file exist to keep torch out of
+# the API's startup path, which does not apply here.
+from rag.graph import build_code_graph, build_graph
 
 router = APIRouter()
 
@@ -102,6 +110,8 @@ async def trigger_index(owner: str, repo: str) -> IndexJobResponse:
 
         await asyncio.to_thread(index_issues, repo_name, "all", 200)
 
+    # Their cache would otherwise serve a pre-index graph.
+    _cached_code_graph.cache_clear()
     asyncio.create_task(_index())
     return IndexJobResponse(job_id=str(uuid.uuid4()), status="queued")
 
@@ -132,28 +142,58 @@ async def get_repo_health(owner: str, repo: str) -> HealthResponse:
     )
 
 
-@router.get("/api/repos/{owner}/{repo}/graph")
-async def get_repo_graph(owner: str, repo: str) -> dict:
-    """Issue relationship graph (F15).
+def _escalated_issue_numbers(repo_name: str) -> set[int]:
+    numbers: set[int] = set()
+    try:
+        for escalation in store.list_escalations(resolved=False):
+            if escalation.get("repo_name") != repo_name:
+                continue
+            investigation = store.get_investigation(
+                escalation["investigation_id"]
+            )
+            if investigation and investigation.get("kind") == "issue":
+                numbers.add(int(investigation["number"]))
+    except Exception:
+        # The graph is still useful before SQLite has been initialized.
+        return set()
+    return numbers
 
-    A thin wrapper over `rag.graph.build_graph` -- the relationships are
-    already in the vector store, so this must not recompute them. Escalated
-    issue numbers are read from SQLite to colour the security nodes.
+
+@router.get(
+    "/api/repos/{owner}/{repo}/graph",
+    response_model=GraphResponse,
+)
+def get_issue_graph(owner: str, repo: str) -> GraphResponse:
+    repo_name = f"{owner}/{repo}"
+    return GraphResponse.model_validate(
+        build_graph(repo_name, _escalated_issue_numbers(repo_name))
+    )
+
+
+@lru_cache(maxsize=8)
+def _cached_code_graph(repo_name: str, changed_paths: tuple[str, ...]) -> dict:
+    return build_code_graph(repo_name, changed_paths)
+
+
+@router.get(
+    "/api/repos/{owner}/{repo}/code-graph",
+    response_model=CodeGraphResponse,
+)
+def get_code_graph(
+    owner: str,
+    repo: str,
+    changed_path: list[str] = Query(default=[]),
+) -> CodeGraphResponse:
+    """Return semantic code structure with an optional impact overlay.
+
+    Repeat `changed_path` to model all files touched by a pull request. Graph
+    construction is deterministic and read-only; the small cache keeps tab
+    changes responsive and is invalidated when repository indexing is
+    requested.
     """
     repo_name = f"{owner}/{repo}"
-
-    escalated: set[int] = set()
-    for row in store.list_escalations(resolved=False):
-        if row["repo_name"] != repo_name:
-            continue
-        investigation = store.get_investigation(row["investigation_id"]) or {}
-        number = investigation.get("number")
-        if number is not None:
-            escalated.add(number)
-
-    from rag.graph import build_graph
-
-    return await asyncio.to_thread(build_graph, repo_name, escalated)
+    graph = _cached_code_graph(repo_name, tuple(sorted(set(changed_path))))
+    return CodeGraphResponse.model_validate(graph)
 
 
 @router.get("/api/brief/{owner}/{repo}", response_model=BriefResponse)
@@ -191,7 +231,7 @@ async def get_brief(owner: str, repo: str) -> BriefResponse:
         trend = "not yet measured"
 
     lines = [
-        f"# Weekly brief — {repo_name}",
+        f"# Weekly brief â€” {repo_name}",
         "",
         "## Activity",
         f"- {len(investigations)} investigation(s) run",
