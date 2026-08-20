@@ -15,8 +15,16 @@ let investigations: InvestigationsTreeProvider
 let pollTimer: ReturnType<typeof setInterval> | undefined
 let panel: vscode.WebviewPanel | undefined
 
-/** Last seen critical count, so a rise can raise a toast. */
-let lastCriticalCount = 0
+/**
+ * Last seen critical count, so a rise can raise a toast.
+ *
+ * `undefined` until the first poll completes. Seeding it to 0 meant the
+ * first poll after activation treated every already-open critical escalation
+ * as brand new and fired a toast for a backlog the user had already seen --
+ * the contract asks for a toast when the count *rises*, and establishing the
+ * baseline is not a rise.
+ */
+let lastCriticalCount: number | undefined
 
 export function activate(context: vscode.ExtensionContext): void {
   statusBarItem = vscode.window.createStatusBarItem(
@@ -54,8 +62,29 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
   )
 
-  pollTimer = setInterval(() => void refreshAll(), pollSeconds() * 1000)
+  // Re-arm on configuration change: the interval is read once when the timer
+  // is created, so without this a new `doombot.pollSeconds` (or a corrected
+  // apiBaseUrl) did nothing until the window was reloaded.
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (!event.affectsConfiguration('doombot')) {
+        return
+      }
+      startPolling()
+      void refreshAll()
+    }),
+  )
+
+  startPolling()
   void refreshAll()
+}
+
+/** (Re)starts the poll timer, replacing any existing one. */
+function startPolling(): void {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+  }
+  pollTimer = setInterval(() => void refreshAll(), pollSeconds() * 1000)
 }
 
 export function deactivate(): void {
@@ -63,6 +92,10 @@ export function deactivate(): void {
     clearInterval(pollTimer)
     pollTimer = undefined
   }
+  // The panel is not in context.subscriptions (it is created on demand), so
+  // it has to be disposed by hand or it outlives deactivation.
+  panel?.dispose()
+  panel = undefined
 }
 
 /**
@@ -90,7 +123,7 @@ async function refreshAll(): Promise<void> {
   // Deliberately dumb: a rise in the critical count is the trigger, with no
   // dedup or cooldown. The contract asks for exactly this and nothing more.
   const critical = escalations.criticalCount()
-  if (critical > lastCriticalCount) {
+  if (lastCriticalCount !== undefined && critical > lastCriticalCount) {
     const added = critical - lastCriticalCount
     void vscode.window
       .showErrorMessage(

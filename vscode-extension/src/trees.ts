@@ -41,14 +41,25 @@ function severityIcon(severity: string): vscode.ThemeIcon {
   }
 }
 
+/**
+ * Investigation status to icon.
+ *
+ * The status values are exactly `running | done | error` -- see
+ * `InvestigationSummary.status` in `api/schemas.py`. This previously matched
+ * on `'completed'`, which the API never emits, so every finished
+ * investigation fell through to the default and showed a spinner forever:
+ * the tree claimed continuous activity while the backend was idle.
+ */
 function statusIcon(status: string): vscode.ThemeIcon {
   switch (status) {
-    case 'completed':
+    case 'done':
       return new vscode.ThemeIcon('pass')
     case 'error':
       return new vscode.ThemeIcon('error')
-    default:
+    case 'running':
       return new vscode.ThemeIcon('sync~spin')
+    default:
+      return new vscode.ThemeIcon('question')
   }
 }
 
