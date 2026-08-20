@@ -25,6 +25,18 @@ import {
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
 const USE_MOCKS = import.meta.env.VITE_USE_MOCKS === "true";
 
+/**
+ * WebSocket URL, derived from API_BASE rather than hardcoded.
+ *
+ * These must agree: the socket and the REST calls are served by the same
+ * FastAPI app. Two independent literals meant setting VITE_API_BASE moved
+ * REST to the new host while the socket silently kept dialling
+ * localhost:8000 -- live streaming broke while every panel still loaded, so
+ * the failure looked like "the agent stopped emitting steps" rather than a
+ * misconfiguration.
+ */
+export const WS_URL = `${API_BASE.replace(/^http/, "ws")}/ws`;
+
 export class ApiError extends Error {
   status: number;
   body: string;
