@@ -1,4 +1,5 @@
 from github import Github
+from urllib3.util import Retry
 from dotenv import load_dotenv
 import logging
 import os
@@ -10,10 +11,42 @@ github_token=os.getenv("GITHUB_TOKEN")
 _client: Github | None = None
 
 def _get_client() -> Github:
+    """The shared PyGithub client, configured to fail fast when throttled.
+
+    PyGithub's default `GithubRetry` *sleeps inside the call* when GitHub
+    returns 403 for a rate limit -- it waits for the quota window to reset.
+    Observed here: "Setting next backoff to 1524.97s", a 25-minute sleep with
+    the request still open. That is why adding a repository buffered forever
+    with nothing in the API log: uvicorn logs on completion, and the request
+    never completed.
+
+    Waiting is arguably correct for a batch job and completely wrong for a
+    request a person is watching. A plain urllib3 retry keeps the useful part
+    -- a couple of attempts at transient 5xx -- without the rate-limit sleep,
+    so an exhausted quota raises RateLimitExceededException in well under a
+    second and the caller can say so. Measured: 0.49s to raise, versus a
+    22-minute hang.
+
+    `per_page=100` is the other half. The default of 30 triples the request
+    count for the same data, and request count is exactly what exhausts the
+    5000/hour quota -- indexing a 200-issue backlog costs 7 pages instead of
+    2. Cheaper is the best defence against hitting the limit at all.
+    """
     global _client
     if _client is None:
-        _client = Github(github_token)
+        _client = Github(
+            github_token,
+            retry=Retry(
+                total=2,
+                backoff_factor=0.4,
+                status_forcelist=[500, 502, 503, 504],
+                allowed_methods=None,
+            ),
+            per_page=100,
+            timeout=20,
+        )
     return _client
+
 
 def git_initialization(repo_name,pr_number):
     g=_get_client()

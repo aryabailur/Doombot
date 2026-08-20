@@ -42,9 +42,24 @@ export class ApiError extends Error {
   body: string;
 
   constructor(status: number, body: string) {
-    super(body);
+    // FastAPI wraps every error as {"detail": "..."}, so the raw body shown to
+    // a user reads as `{"detail":"GitHub API quota exhausted..."}`. The message
+    // inside is written to be read; the JSON around it is not.
+    super(ApiError.readable(body));
     this.status = status;
     this.body = body;
+  }
+
+  private static readable(body: string): string {
+    try {
+      const parsed = JSON.parse(body) as { detail?: unknown };
+      if (typeof parsed.detail === "string" && parsed.detail) {
+        return parsed.detail;
+      }
+    } catch {
+      // Not JSON: the raw text is the best available message.
+    }
+    return body;
   }
 }
 

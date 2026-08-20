@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 
@@ -135,9 +136,8 @@ async def scan_repository(
     try:
         await asyncio.to_thread(lambda: _get_client().get_repo(repo_name).full_name)
     except Exception as exc:
-        raise HTTPException(
-            status_code=502, detail=f"could not read repository: {exc}"
-        ) from exc
+        status, detail = _github_error_detail(exc)
+        raise HTTPException(status_code=status, detail=detail) from exc
 
     background.add_task(_scan_and_queue, repo_name, limit)
     return {"repo_name": repo_name, "status": "scanning", "limit": limit}
@@ -209,6 +209,37 @@ async def _scan_and_queue(repo_name: str, limit: int) -> None:
         )
 
 
+def _github_error_detail(exc: Exception) -> tuple[int, str]:
+    """Map a GitHub failure onto a status and a message worth reading.
+
+    A rate limit is not a server error and must not read like one: it is
+    temporary, it has a known end time, and the only useful response is to say
+    when to try again. Anything else keeps its own wording.
+    """
+    from github import GithubException
+
+    if type(exc).__name__ == "RateLimitExceededException":
+        reset = ""
+        try:
+            from mcp_server.github_client import _get_client
+
+            core = _get_client().get_rate_limit().resources.core
+            minutes = max(
+                0, int((core.reset.timestamp() - time.time()) // 60)
+            )
+            reset = f" Resets in about {minutes} minute(s)."
+        except Exception:
+            pass
+        return 429, (
+            "GitHub API quota exhausted for this token." + reset
+        )
+
+    if isinstance(exc, GithubException) and exc.status == 404:
+        return 404, "No such repository, or the token cannot see it."
+
+    return 502, f"could not read repository: {exc}"
+
+
 @router.post("/api/repos/{owner}/{repo_slug}/onboard")
 async def onboard_repository(
     owner: str,
@@ -238,10 +269,9 @@ async def onboard_repository(
             lambda: _get_client().get_repo(repo_name).full_name
         )
     except Exception as exc:
-        await _stage("connect", "error", repo_name, f"Could not reach {repo_name}")
-        raise HTTPException(
-            status_code=502, detail=f"could not read repository: {exc}"
-        ) from exc
+        status, detail = _github_error_detail(exc)
+        await _stage("connect", "error", repo_name, detail)
+        raise HTTPException(status_code=status, detail=detail) from exc
 
     await _stage("connect", "done", repo_name, f"Connected to {full_name}")
     background.add_task(_onboard_pipeline, repo_name, limit)
@@ -271,7 +301,13 @@ async def _onboard_pipeline(repo_name: str, limit: int) -> None:
     await _stage("index", "running", repo_name, "Embedding the issue backlog")
     indexed = 0
     try:
-        indexed = await asyncio.to_thread(index_issues, repo_name, "all", 200)
+        # 120, not 200. Every indexed issue is GitHub request budget, and the
+        # 5000/hour quota is shared with investigations, health, and the graph
+        # -- exhausting it on embedding takes the whole app down for an hour,
+        # which is exactly what happened during testing. 120 is still a
+        # substantial corpus for duplicate detection, and it is the recent
+        # issues that duplicate triage actually compares against.
+        indexed = await asyncio.to_thread(index_issues, repo_name, "all", 120)
     except Exception as exc:
         logger.warning("onboard: indexing failed for %s: %s", repo_name, exc)
         await _stage("index", "error", repo_name, "Could not embed the backlog")
