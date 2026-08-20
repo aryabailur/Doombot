@@ -176,18 +176,19 @@ function HealthPage({ state }: { state: AppState }) {
 
 
 function GraphPage({ state }: { state: AppState }) {
-  const [graph, setGraph] = useState<CodeGraphResponse | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [result, setResult] = useState<{
+    key: string
+    graph: CodeGraphResponse | null
+    error: string | null
+  } | null>(null)
   const [reload, setReload] = useState(0)
+  const requestKey = `${state.selectedRepo.repo_name}:${reload}`
+  const [owner, repo] = state.selectedRepo.repo_name.split('/', 2)
 
   useEffect(() => {
     let active = true
-    const [owner, repo] = state.selectedRepo.repo_name.split('/', 2)
-    setGraph(null)
-    setError(null)
 
     if (!owner || !repo) {
-      setError('The selected repository name must use the owner/repository format.')
       return () => {
         active = false
       }
@@ -204,23 +205,34 @@ function GraphPage({ state }: { state: AppState }) {
     void getCodeGraph(owner, repo, changedPaths)
       .then((response) => {
         if (active) {
-          setGraph(response)
+          setResult({ key: requestKey, graph: response, error: null })
         }
       })
       .catch((reason: unknown) => {
         if (active) {
-          setError(
-            reason instanceof Error
-              ? reason.message
-              : 'The semantic graph request failed.',
-          )
+          setResult({
+            key: requestKey,
+            graph: null,
+            error:
+              reason instanceof Error
+                ? reason.message
+                : 'The semantic graph request failed.',
+          })
         }
       })
 
     return () => {
       active = false
     }
-  }, [reload, state.selectedRepo.repo_name])
+  }, [owner, repo, requestKey, state.selectedRepo.repo_name])
+
+  const error =
+    !owner || !repo
+      ? 'The selected repository name must use the owner/repository format.'
+      : result?.key === requestKey
+        ? result.error
+        : null
+  const graph = result?.key === requestKey ? result.graph : null
 
   if (error) {
     return (
