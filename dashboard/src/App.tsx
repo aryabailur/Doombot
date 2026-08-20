@@ -31,6 +31,7 @@ import { HealthScoreCard } from '@/components/HealthScoreCard'
 import { HealthTrendChart } from '@/components/HealthTrendChart'
 import { InvestigationList } from '@/components/InvestigationList'
 import { InvestigationTrace } from '@/components/InvestigationTrace'
+import { ExplorerPage } from '@/components/explorer/ExplorerPage'
 import { IssueGraph } from '@/components/IssueGraph'
 import {
   OnboardingPipeline,
@@ -755,6 +756,7 @@ export function App() {
             path="/investigations/:id"
           />
           <Route element={<GraphPage repoName={repoName} />} path="/graph" />
+          <Route element={<ExplorerPage repoName={repoName} />} path="/explorer" />
           <Route element={<HealthPage repoName={repoName} />} path="/health" />
         </Routes>
       </AppShell>

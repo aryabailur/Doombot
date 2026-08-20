@@ -10,6 +10,7 @@ import type {
   CodeGraphResponse,
   IndexJobResponse,
   IssueGraphResponse,
+  SourceFile,
 } from "./types";
 import {
   mockRepos,
@@ -20,6 +21,7 @@ import {
   mockBrief,
   mockCodeGraph,
   mockIssueGraph,
+  mockSourceFile,
 } from "./mocks";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
@@ -183,4 +185,21 @@ export function getCodeGraph(
   const encoded = params.toString();
   const query = encoded ? `?${encoded}` : "";
   return request(`/api/repos/${owner}/${repo}/code-graph${query}`);
+}
+
+/**
+ * One repository file, for the explorer's code pane.
+ *
+ * Fetched per click rather than bundled into the code graph: sixty files of
+ * source would multiply that payload for content nobody reads until they open a
+ * file. Cached server-side, so clicking back through a subsystem is free.
+ */
+export function getSourceFile(
+  owner: string,
+  repo: string,
+  path: string,
+): Promise<SourceFile> {
+  if (USE_MOCKS) return delay().then(() => mockSourceFile(path));
+  const query = `?path=${encodeURIComponent(path)}`;
+  return request(`/api/repos/${owner}/${repo}/source${query}`);
 }

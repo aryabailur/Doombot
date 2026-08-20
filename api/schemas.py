@@ -215,3 +215,17 @@ class CodeGraphResponse(BaseModel):
     links: list[CodeGraphLink]
     stats: CodeGraphStats
     impact: CodeGraphImpact
+    # Additive, defaulted: every source file the build read, so the explorer's
+    # file tree can list files that parsed to zero symbols. Defaulted so an
+    # older payload still validates.
+    files: list[str] = []
+
+
+class SourceFileResponse(BaseModel):
+    """One repository file, read on demand for the code explorer's code pane."""
+
+    path: str
+    content: str
+    lines: int
+    language: str
+    truncated: bool
