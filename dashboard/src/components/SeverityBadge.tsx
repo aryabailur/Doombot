@@ -28,8 +28,10 @@ interface SeverityStyle {
  * Severity encoded four ways: colour, fill weight, icon, and the word.
  *
  * The palette has a measured defect (docs/DESIGN-ADDENDUM.md 2): --high
- * (#fb7185) has *higher* relative luminance than --critical (#f43f5e), and
- * --warning higher than both. On a dark surface brighter reads as more urgent,
+ * (#ff8a5c, L=0.40) has *higher* relative luminance than --critical (#f2585d,
+ * L=0.27), and --warning (#f0b93f, L=0.54) higher than both. Re-measured after
+ * the Calm Control Room port -- the hexes changed, the inversion did not, so
+ * everything below still applies. On a dark surface brighter reads as more urgent,
  * so hue alone inverts the hierarchy exactly where it matters most -- the
  * escalation queue.
  *

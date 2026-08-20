@@ -53,6 +53,40 @@ export default {
         information: 'var(--information)',
         success: 'var(--success)',
         neutral: 'var(--neutral)',
+        // mayank's names, so a component ported from that branch styles
+        // correctly without a rename pass.
+        ink: 'var(--text-primary)',
+        info: 'var(--info)',
+        danger: 'var(--danger)',
+        security: 'var(--security)',
+        mint: 'var(--mint)',
+        lilac: 'var(--lilac)',
+        // The soft companion fills. In the light theme these are pastels; here
+        // they are alpha tints, which is why they are separate tokens rather
+        // than `bg-accent/14` -- the opacity belongs to the palette, not the
+        // call site, so every badge in the app agrees on it.
+        'accent-soft': 'var(--accent-soft)',
+        'info-soft': 'var(--info-soft)',
+        'success-soft': 'var(--success-soft)',
+        'warning-soft': 'var(--warning-soft)',
+        'danger-soft': 'var(--danger-soft)',
+        'security-soft': 'var(--security-soft)',
+      },
+      boxShadow: {
+        // The flat offset shadows this design system is built on. Referenced in
+        // ten places before this and defined in none of them, so every
+        // `shadow-brutal` in the dashboard was a no-op.
+        brutal: 'var(--shadow-flat)',
+        'brutal-sm': 'var(--shadow-flat-sm)',
+        'brutal-lg': 'var(--shadow-flat-lg)',
+        raised: 'var(--shadow-raised)',
+        overlay: 'var(--shadow-overlay)',
+      },
+      borderRadius: {
+        DEFAULT: 'var(--radius)',
+        sm: 'var(--radius-sm)',
+        md: 'var(--radius-md)',
+        lg: 'var(--radius-lg)',
       },
       fontFamily: {
         sans: ['var(--font-sans)'],

@@ -64,7 +64,12 @@ export function HealthMetricBreakdown({
     <div className={cn('flex flex-col gap-2', className)}>
       {components.map((component) => {
         const band = scoreBand(component.score)
-        const clamped = Math.max(0, Math.min(100, component.score))
+        // Rounded, not just clamped. `staleness` arrives from the API as a raw
+        // float and rendered as "98.80185779750515" in a 40px-wide column --
+        // fifteen digits of precision the score does not have and no reader
+        // wants. dashboard/CLAUDE.md 9.4 asks for meaning over decorative
+        // precision; a health sub-score is a whole number.
+        const clamped = Math.round(Math.max(0, Math.min(100, component.score)))
         return (
           <div className="flex flex-col gap-1" key={component.key}>
             <div className="flex items-baseline justify-between gap-2 text-xs">
