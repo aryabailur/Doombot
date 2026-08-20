@@ -60,7 +60,8 @@ _TS_IMPORT = re.compile(
 )
 _TS_FUNCTION = re.compile(
     r"(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+"
-    r"(?P<name>[A-Za-z_$][\w$]*)\s*\([^)]*\)\s*(?::[^={]+)?\s*\{",
+    r"(?P<name>[A-Za-z_$][\w$]*)\s*\([^)]*\)\s*"
+    r"(?::\s*(?:Promise\s*<\s*\{[^{}]*\}\s*>|[^{=]+))?\s*\{",
     re.MULTILINE,
 )
 _TS_ARROW = re.compile(
@@ -81,6 +82,14 @@ _TS_MEMBER_CALL = re.compile(
 _TS_JSX = re.compile(r"<(?P<name>[A-Z][A-Za-z0-9_$]*)\b")
 _TS_FETCH = re.compile(
     r"fetch\(\s*(?P<quote>['\"`])(?P<url>.+?)(?P=quote)", re.DOTALL
+)
+_TS_REQUEST = re.compile(
+    r"(?<![.\w$])request\(\s*(?P<quote>['\"`])(?P<url>.+?)(?P=quote)",
+    re.DOTALL,
+)
+_TS_HTTP_METHOD_OPTION = re.compile(
+    r"\bmethod\s*:\s*['\"](?P<method>GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)['\"]",
+    re.IGNORECASE,
 )
 
 
@@ -503,6 +512,14 @@ def _typescript_kind(file_path: str, name: str, body: str, declared: str) -> str
     return "function"
 
 
+def _typescript_http_target(body: str, match: re.Match[str]) -> str:
+    """Preserve an explicit request method so GET/POST route pairs do not collide."""
+    option_window = body[match.end() : match.end() + 240]
+    method = _TS_HTTP_METHOD_OPTION.search(option_window)
+    verb = method.group("method").upper() if method else "GET"
+    return f"{verb} {match.group('url')}"
+
+
 def _parse_typescript(file_path: str, source: str) -> list[dict]:
     units: list[dict] = []
     declarations: list[tuple[re.Pattern[str], str]] = [
@@ -513,7 +530,10 @@ def _parse_typescript(file_path: str, source: str) -> list[dict]:
     for pattern, declared in declarations:
         for match in pattern.finditer(source):
             name = match.group("name")
-            open_offset = source.find("{", match.start(), match.end() + 1)
+            # Every declaration pattern ends on the body brace. Using the
+            # first brace in the full match mistakes object-shaped return
+            # types such as Promise<{ ok: boolean }> for the function body.
+            open_offset = match.end() - 1
             if open_offset < 0:
                 continue
             end_offset = _find_matching_brace(source, open_offset)
@@ -525,7 +545,13 @@ def _parse_typescript(file_path: str, source: str) -> list[dict]:
             )
             calls.extend(("renders", item.group("name")) for item in _TS_JSX.finditer(body))
             for fetch in _TS_FETCH.finditer(body):
-                calls.append(("http_calls", fetch.group("url")))
+                calls.append(("http_calls", _typescript_http_target(body, fetch)))
+            # Doombot's dashboard deliberately funnels fetch through the
+            # typed request() helper. Treat literal/template route arguments
+            # exactly like fetch() so browser-to-FastAPI dependencies are not
+            # lost merely because transport is centralized in lib/api.ts.
+            for request in _TS_REQUEST.finditer(body):
+                calls.append(("http_calls", _typescript_http_target(body, request)))
             qualname = f"{file_path}::{name}"
             units.append(
                 {
@@ -572,6 +598,14 @@ def _resolve_ts_file(importer: str, module: str, known_paths: set[str]) -> str |
 
 
 def _normalise_route(path: str) -> str:
+    # Doombot appends a prebuilt query string to several typed API routes.
+    # It is transport metadata, not part of the FastAPI path template.
+    path = re.sub(
+        r"\$\{(?:query|encoded|params|searchParams)\}$",
+        "",
+        path,
+        flags=re.IGNORECASE,
+    )
     path = re.sub(r"\$\{[^}]+\}|\{[^}]+\}|\[[^]]+\]", "{}", path)
     return re.sub(r"/+", "/", path.split("?", 1)[0]).rstrip("/") or "/"
 
@@ -586,7 +620,12 @@ def _select_target(
     routes: Mapping[str, dict],
 ) -> dict | None:
     if edge_type == "http_calls":
-        return routes.get(_normalise_route(raw_name))
+        method, separator, route_path = raw_name.partition(" ")
+        if separator and method in _HTTP_METHODS:
+            exact = routes.get(f"{method} {_normalise_route(route_path)}")
+            if exact:
+                return exact
+        return routes.get(_normalise_route(route_path if separator else raw_name))
 
     name = raw_name.rsplit(".", 1)[-1]
     same_file = by_file_symbol.get((source["file_path"], name))
@@ -790,8 +829,10 @@ def build_code_graph(
         by_symbol[unit["lookup_name"]].append(unit)
         by_file_symbol[(unit["file_path"], unit["lookup_name"])] = unit
         if unit.get("route"):
-            _method, route_path = unit["route"]
-            routes[_normalise_route(route_path)] = unit
+            method, route_path = unit["route"]
+            normalized = _normalise_route(route_path)
+            routes[f"{method} {normalized}"] = unit
+            routes.setdefault(normalized, unit)
 
     links: list[dict] = []
     seen: set[tuple[str, str, str]] = set()
