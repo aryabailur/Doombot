@@ -1,7 +1,4 @@
-// Hand-mirrored from api/schemas.py. Field names and casing are literal —
-// do not translate to camelCase, the wire format is snake_case.
-
-export type StepStatus = "running" | "done" | "error";
+// Hand-mirrored from api/schemas.py. Field names/casing are literal.
 
 export interface Evidence {
   type: string;
@@ -9,6 +6,8 @@ export interface Evidence {
   score: number;
   snippet: string;
 }
+
+export type StepStatus = "running" | "done" | "error";
 
 export interface StepRecord {
   step_id: string;
@@ -23,6 +22,7 @@ export interface StepRecord {
   duration_ms: number;
   started_at: string;
   ended_at: string | null;
+  tool_calls: string[];
 }
 
 export type InvestigationKind = "issue" | "pr";
@@ -46,7 +46,7 @@ export interface InvestigationDetail extends InvestigationSummary {
   impact_score: number | null;
 }
 
-export interface Escalation {
+export interface EscalationApi {
   investigation_id: string;
   reason: string;
   severity: string;
@@ -55,25 +55,37 @@ export interface Escalation {
   created_at: string;
 }
 
-export interface HealthBreakdown {
+export interface HealthBreakdownApi {
   security: number;
   staleness: number;
   duplication: number;
   responsiveness: number;
 }
 
-export interface HealthPoint {
+export interface HealthPointApi {
   ts: string;
   score: number;
 }
 
-export interface HealthResponse {
-  score: number;
-  breakdown: HealthBreakdown;
-  history: HealthPoint[];
+export type HealthTrend = "improving" | "stable" | "declining";
+
+export interface HealthForecastApi {
+  horizon_days: number;
+  projected_score: number;
+  projected_backlog: number | null;
+  confidence: number;
+  trend: HealthTrend;
+  reason: string;
 }
 
-export interface RepoSummary {
+export interface HealthResponseApi {
+  score: number;
+  breakdown: HealthBreakdownApi;
+  history: HealthPointApi[];
+  forecast: HealthForecastApi | null;
+}
+
+export interface RepoSummaryApi {
   repo_name: string;
   health_score: number;
   open_investigations: number;
@@ -93,7 +105,7 @@ export interface FeedbackRequest {
   note?: string | null;
 }
 
-export interface BriefResponse {
+export interface BriefResponseApi {
   markdown: string;
   generated_at: string;
 }
@@ -104,19 +116,62 @@ export interface IndexJobResponse {
 }
 
 export interface WsEnvelope<T = unknown> {
-  type: "step.started" | "step.completed" | "investigation.completed" | "activity";
+  type:
+    | "step.started"
+    | "step.completed"
+    | "investigation.completed"
+    | "activity"
+    | "action.approved";
   data: T;
 }
 
-export interface InvestigationCompletedPayload {
-  investigation_id: string;
-  decision: string;
-  health_delta: number;
+export interface MemoryQueryResult {
+  item_id: string;
+  type: string;
+  title: string;
+  score: number;
+  reason: string;
+  number: number | null;
+  url: string | null;
 }
 
-export interface ActivityPayload {
+export interface MemoryQueryResponseApi {
+  query: string;
+  results: MemoryQueryResult[];
+}
+
+export interface ActivityEventApi {
   ts: string;
+  investigation_id: string;
   repo_name: string;
+  kind: string;
   message: string;
   severity: string;
+  number: number | null;
+}
+
+export interface ActivityPageApi {
+  events: ActivityEventApi[];
+  next_cursor: string | null;
+}
+
+export type SuggestedActionKind = "add_labels" | "post_comment";
+export type SuggestedActionStatus = "pending" | "approved" | "rejected";
+
+export interface SuggestedActionApi {
+  action_id: string;
+  investigation_id: string;
+  repo_name: string;
+  number: number;
+  kind: SuggestedActionKind;
+  payload: { labels?: string[]; comment?: string };
+  reason: string;
+  confidence: number;
+  status: SuggestedActionStatus;
+  created_at: string;
+}
+
+export interface ApproveActionResponseApi {
+  ok: boolean;
+  result: string;
 }

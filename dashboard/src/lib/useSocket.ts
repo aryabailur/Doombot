@@ -1,21 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import type { WsEnvelope } from "./types";
 
+export type ConnectionState = "connecting" | "connected" | "reconnecting" | "offline";
+
 interface UseSocketOptions {
   url: string;
   onEvent: (envelope: WsEnvelope) => void;
   enabled?: boolean;
 }
 
-export type ConnectionState = "connecting" | "connected" | "reconnecting" | "offline";
-
-interface UseSocketResult {
-  connectionState: ConnectionState;
-}
-
 const BACKOFF_STEPS = [1000, 2000, 4000, 8000, 16000, 30000];
 
-export function useSocket({ url, onEvent, enabled = true }: UseSocketOptions): UseSocketResult {
+export function useSocket({ url, onEvent, enabled = true }: UseSocketOptions): { connectionState: ConnectionState } {
   const [connectionState, setConnectionState] = useState<ConnectionState>("connecting");
   const onEventRef = useRef(onEvent);
   onEventRef.current = onEvent;
@@ -31,7 +27,12 @@ export function useSocket({ url, onEvent, enabled = true }: UseSocketOptions): U
     function connect() {
       if (cancelled) return;
       setConnectionState(everConnectedRef.current ? "reconnecting" : "connecting");
-      socket = new WebSocket(url);
+      try {
+        socket = new WebSocket(url);
+      } catch {
+        setConnectionState("offline");
+        return;
+      }
 
       socket.onopen = () => {
         everConnectedRef.current = true;
