@@ -90,6 +90,10 @@ export function Graphs() {
   /** Hide low-connectivity symbols; the full code graph is a hairball. */
   const [minDegree, setMinDegree] = useState(2);
   const [subsystem, setSubsystem] = useState<string>("");
+  const [hoveredCodeId, setHoveredCodeId] = useState<string | null>(null);
+  const [selectedCode, setSelectedCode] = useState<
+    CodeGraphResponseApi["nodes"][number] | null
+  >(null);
 
   const [owner, repo] = repoName.split("/");
 
@@ -245,22 +249,41 @@ export function Graphs() {
       return true;
     });
     const ids = new Set(nodes.map((n) => n.id));
-    // Positions are precomputed server-side, so the layout is stable rather
-        // than re-simulated on every mount.
+    // Server positions seed the layout; they do not pin it.
+    //
+    // Pinning with fx/fy made this a static picture -- nothing settled, nothing
+    // could be dragged, and the whole thing read as a diagram rather than a
+    // graph. Seeding instead means the simulation starts from a sensible
+    // arrangement (so it converges in a second rather than flailing) and then
+    // behaves like a real force graph: it relaxes, it responds, nodes can be
+    // pulled around to untangle a cluster.
     const scale = 18;
     return {
       nodes: nodes.map((n) => ({
         ...n,
         x: n.x2d * scale,
         y: n.y2d * scale,
-        fx: n.x2d * scale,
-        fy: n.y2d * scale,
       })),
       links: (codeGraph?.links ?? [])
         .filter((l) => ids.has(l.source) && ids.has(l.target))
         .map((l) => ({ ...l })),
     };
   }, [codeGraph, minDegree, subsystem]);
+
+  /** The focused symbol and everything one dependency away from it. */
+  const codeFocus = useMemo(() => {
+    if (!hoveredCodeId) return null;
+    const nodeIds = new Set<string>([hoveredCodeId]);
+    const edges = new Set<string>();
+    for (const link of codeGraph?.links ?? []) {
+      if (link.source === hoveredCodeId || link.target === hoveredCodeId) {
+        nodeIds.add(link.source);
+        nodeIds.add(link.target);
+        edges.add(`${link.source}->${link.target}`);
+      }
+    }
+    return { nodeIds, edges };
+  }, [hoveredCodeId, codeGraph]);
 
   const clusterColour = useCallback(
     (cluster: string) => {
@@ -281,25 +304,71 @@ export function Graphs() {
       const x = node.x ?? 0;
       const y = node.y ?? 0;
       const radius = 4 + Math.min(5, node.hub_score * 9);
+      const colour = clusterColour(node.cluster_label);
+
+      const focused = codeFocus ? codeFocus.nodeIds.has(node.id) : true;
+      const isRoot = node.id === hoveredCodeId;
+      const isSelected = node.id === selectedCode?.id;
+      ctx.globalAlpha = focused ? 1 : 0.12;
+
+      // A halo under the focused symbol and its neighbours, so a selection is
+      // findable in a graph of several hundred nodes.
+      if (focused && codeFocus) {
+        const spread = radius * (isRoot ? 3.4 : 2.2);
+        ctx.globalAlpha = isRoot ? 0.32 : 0.16;
+        ctx.beginPath();
+        ctx.arc(x, y, spread, 0, Math.PI * 2);
+        ctx.fillStyle = colour;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
 
       ctx.beginPath();
       ctx.arc(x, y, radius, 0, Math.PI * 2);
-      ctx.fillStyle = clusterColour(node.cluster_label);
+      ctx.fillStyle = colour;
       ctx.fill();
-      ctx.lineWidth = 1.2 / scale;
-      ctx.strokeStyle = token("--card");
+      ctx.lineWidth = (isSelected ? 2.4 : 1.2) / scale;
+      ctx.strokeStyle = isSelected ? token("--ink") : token("--card");
       ctx.stroke();
 
-      if (scale > 0.8) {
-        const fontSize = Math.min(12, Math.max(8, 10 / scale));
+      // Labels are the reason the first version read as noise: 129 symbol
+      // names drawn at once overlap into mush and hide the structure they were
+      // meant to explain. Now they appear only where they can be read -- the
+      // focused neighbourhood, the selected node, or once zoomed in past 1.5x.
+      const showLabel =
+        isRoot ||
+        isSelected ||
+        (codeFocus !== null && focused) ||
+        scale > 1.5;
+
+      if (showLabel) {
+        const fontSize = Math.min(13, Math.max(9, 11 / scale));
         ctx.font = `600 ${fontSize}px ui-monospace, SFMono-Regular, monospace`;
         ctx.textAlign = "center";
         ctx.textBaseline = "top";
+
+        // A card-coloured plate behind the text, so a label crossing an edge
+        // stays readable instead of blending into the line.
+        const label = node.symbol_name;
+        const width = ctx.measureText(label).width;
+        const padding = 3 / scale;
+        ctx.fillStyle = token("--card");
+        ctx.globalAlpha = focused ? 0.85 : 0;
+        ctx.fillRect(
+          x - width / 2 - padding,
+          y + radius + 1 / scale,
+          width + padding * 2,
+          fontSize + padding
+        );
+
+        ctx.globalAlpha = focused ? 1 : 0.12;
         ctx.fillStyle = token("--ink");
-        ctx.fillText(node.symbol_name, x, y + radius + 2 / scale);
+        ctx.fillText(label, x, y + radius + 2 / scale);
       }
+
+      ctx.globalAlpha = 1;
     },
-    [clusterColour]
+    [clusterColour, codeFocus, hoveredCodeId, selectedCode]
   );
 
   function toggleCategory(category: string) {
@@ -512,25 +581,96 @@ export function Graphs() {
                   backgroundColor={token("--card")}
                   graphData={codeData}
                   height={520}
-                  cooldownTicks={0}
-                  enableNodeDrag={false}
-                  linkColor={() => token("--muted")}
-                  linkDirectionalArrowLength={2.5}
-                  linkWidth={0.7}
+                  // Let it settle rather than freezing on tick zero, and let
+                  // nodes be dragged -- pulling a cluster apart is how you
+                  // actually read a dense dependency graph.
+                  cooldownTicks={80}
+                  d3VelocityDecay={0.35}
+                  enableNodeDrag
+                  linkColor={(raw) => {
+                    const link = raw as { source: unknown; target: unknown };
+                    if (!codeFocus) return token("--border");
+                    return codeFocus.edges.has(linkKey(link))
+                      ? token("--ink")
+                      : token("--border");
+                  }}
+                  linkDirectionalArrowLength={(raw) =>
+                    codeFocus && codeFocus.edges.has(linkKey(raw as never)) ? 4 : 2
+                  }
+                  linkWidth={(raw) => {
+                    const link = raw as { source: unknown; target: unknown };
+                    if (!codeFocus) return 0.7;
+                    return codeFocus.edges.has(linkKey(link)) ? 2.2 : 0.35;
+                  }}
                   nodeCanvasObject={paintCodeNode}
                   nodeLabel={(raw) => {
                     const node = raw as CodeGraphResponseApi["nodes"][number];
                     return `${node.qualname}\n${node.file_path}:${node.start_line}`;
                   }}
+                  onNodeClick={(raw) =>
+                    setSelectedCode(
+                      raw as CodeGraphResponseApi["nodes"][number]
+                    )
+                  }
+                  onNodeHover={(raw) =>
+                    setHoveredCodeId(
+                      raw
+                        ? (raw as CodeGraphResponseApi["nodes"][number]).id
+                        : null
+                    )
+                  }
                 />
               </Suspense>
             )}
           </div>
 
+          {/* Clicking a symbol has to say something, or the interaction is
+              decoration. This is the one place a reader can find out what a
+              dot actually is. */}
+          {selectedCode ? (
+            <div className="rounded-xl border border-border bg-card p-4 shadow-flat-sm">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="break-all font-mono text-sm font-bold text-ink">
+                    {selectedCode.qualname}
+                  </p>
+                  <p className="mt-0.5 break-all font-mono text-xs text-muted">
+                    {selectedCode.file_path}:{selectedCode.start_line}–
+                    {selectedCode.end_line}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setSelectedCode(null)}
+                  className="flex-none text-xs font-bold text-muted hover:text-ink"
+                >
+                  Clear
+                </button>
+              </div>
+              <dl className="mt-3 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
+                {[
+                  ["Subsystem", selectedCode.cluster_label],
+                  ["Kind", selectedCode.kind],
+                  ["Runtime", selectedCode.runtime],
+                  [
+                    "Connections",
+                    `${selectedCode.in_degree} in · ${selectedCode.out_degree} out`,
+                  ],
+                ].map(([label, value]) => (
+                  <div key={label}>
+                    <dt className="text-muted">{label}</dt>
+                    <dd className="font-mono font-bold text-ink">{value}</dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
+          ) : null}
+
           <p className="text-xs text-muted">
-            Colour is the subsystem, size is how central a symbol is. Positions
-            are computed server-side, so the layout is the same every time you
-            open it.
+            Hover a symbol to light what depends on it; click one for its file
+            and connections; drag to pull a cluster apart. Colour is the
+            subsystem, size is how central a symbol is. The layout starts from
+            a server-computed arrangement and then settles, so it opens in
+            roughly the same shape each time rather than somewhere random.
           </p>
         </section>
       )}
