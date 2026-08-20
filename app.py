@@ -37,7 +37,7 @@ async def _run_streaming(graph, state: dict) -> dict:
     """
     async for mode, chunk in graph.astream(state, stream_mode=["custom", "updates"]):
         if mode == "custom" and chunk["type"] == "step.completed":
-            step = chunk["step"]
+            step = chunk["data"]
             mark = {"done": "OK", "error": "!!"}.get(step["status"], "..")
             print(f"  [{mark}] {step['seq']} {step['title']:<34} {_fmt(step['duration_ms']):>7}")
             if step["status"] == "error":

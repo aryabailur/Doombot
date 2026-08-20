@@ -135,7 +135,7 @@ def chain_step(name: str, title: str):
             seq = _next_seq(state)
             rec = _base_record(state, seq, name, title)
 
-            writer({"type": "step.started", "step": rec})
+            writer({"type": "step.started", "data": rec})
             start = time.perf_counter()
 
             try:
@@ -148,7 +148,7 @@ def chain_step(name: str, title: str):
                     "duration_ms": int((time.perf_counter() - start) * 1000),
                     "ended_at": _utcnow(),
                 }
-                writer({"type": "step.completed", "step": rec})
+                writer({"type": "step.completed", "data": rec})
                 # Observe and report, then let LangGraph's run-level handling
                 # take over. Never swallow.
                 raise
@@ -161,7 +161,7 @@ def chain_step(name: str, title: str):
                 "duration_ms": int((time.perf_counter() - start) * 1000),
                 "ended_at": _utcnow(),
             }
-            writer({"type": "step.completed", "step": rec})
+            writer({"type": "step.completed", "data": rec})
 
             # Return only the ONE new record. The `add` reducer on
             # state["chain"] accumulates across nodes -- returning
