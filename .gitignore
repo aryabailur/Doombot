@@ -16,4 +16,5 @@ chroma_*/          # scratch indexes from local test runs
 node_modules/
 dist/
 .vite/
+vscode-extension/out/    # compiled extension output
 *.vsix
