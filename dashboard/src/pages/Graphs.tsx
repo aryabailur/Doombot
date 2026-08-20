@@ -1,4 +1,12 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Network, Code2 } from "lucide-react";
 
 import { useRepo } from "../lib/RepoContext";
@@ -97,6 +105,20 @@ export function Graphs() {
 
   const [owner, repo] = repoName.split("/");
 
+  /**
+   * Which repository the in-flight requests belong to.
+   *
+   * The code graph can take the better part of a minute, which is long enough
+   * for the reader to switch repositories mid-flight. Without this key, two
+   * things went wrong: the stale response resolved and populated the *previous*
+   * repository's graph under the new repository's name, and `loadingCode`
+   * stayed true so the guard below blocked the new fetch permanently -- the
+   * panel sat on "Reading source…" for a repository nobody was ever fetching.
+   */
+  const requestKey = `${owner}/${repo}`;
+  const activeKey = useRef(requestKey);
+  activeKey.current = requestKey;
+
   useEffect(() => {
     setIssueGraph(null);
     setCodeGraph(null);
@@ -104,13 +126,25 @@ export function Graphs() {
     setCodeError(null);
     setSelectedLink(null);
     setSubsystem("");
+    setSelectedCode(null);
+    setHoveredCodeId(null);
+    // Reset explicitly: a fetch still running for the previous repository
+    // would otherwise keep this true and starve the next one.
+    setLoadingCode(false);
 
     if (!owner || !repo) return;
 
+    const key = requestKey;
     getIssueGraph(owner, repo)
-      .then(setIssueGraph)
-      .catch(() => setIssueError("Could not load the issue graph. Index the repository first."));
-  }, [owner, repo]);
+      .then((data) => {
+        if (activeKey.current !== key) return;
+        setIssueGraph(data);
+      })
+      .catch(() => {
+        if (activeKey.current !== key) return;
+        setIssueError("Could not load the issue graph. Index the repository first.");
+      });
+  }, [owner, repo, requestKey]);
 
   /**
    * The code graph is fetched only once its tab is opened.
@@ -118,18 +152,28 @@ export function Graphs() {
    * It reads every source file in the repository -- one GitHub request each --
    * and measured 43s on yt-dlp. Fetching it alongside the issue graph meant
    * simply opening this page paid that cost even for someone who never left
-   * the Issues tab. Requested on demand, and only once per repository.
+   * the Issues tab. Requested on demand, and once per repository.
    */
   useEffect(() => {
     if (view !== "code" || !owner || !repo) return;
     if (codeGraph !== null || codeError !== null || loadingCode) return;
 
+    const key = requestKey;
     setLoadingCode(true);
     getCodeGraph(owner, repo)
-      .then(setCodeGraph)
-      .catch(() => setCodeError("Could not read this repository's source files."))
-      .finally(() => setLoadingCode(false));
-  }, [view, owner, repo, codeGraph, codeError, loadingCode]);
+      .then((data) => {
+        if (activeKey.current !== key) return;
+        setCodeGraph(data);
+      })
+      .catch(() => {
+        if (activeKey.current !== key) return;
+        setCodeError("Could not read this repository's source files.");
+      })
+      .finally(() => {
+        if (activeKey.current !== key) return;
+        setLoadingCode(false);
+      });
+  }, [view, owner, repo, requestKey, codeGraph, codeError, loadingCode]);
 
   /**
    * Start the filter where the graph is legible for *this* repository.
