@@ -5,6 +5,9 @@ import type {
   InvestigationDetail,
   Escalation,
   BriefResponse,
+  CodeGraphNode,
+  CodeGraphResponse,
+  IssueGraphResponse,
 } from "./types";
 
 export const mockRepos: RepoSummary[] = [
@@ -179,4 +182,106 @@ export const mockEscalations: Escalation[] = [
 export const mockBrief: BriefResponse = {
   markdown: `# Weekly Brief\n\n## Summary\nRepository health is trending upward. Security posture remains strong.\n\n## Recommendations\n- Triage issues open longer than 30 days\n`,
   generated_at: new Date().toISOString(),
+};
+
+export const mockIssueGraph: IssueGraphResponse = {
+  nodes: [
+    { id: "issue-3", number: 3, title: "Login fails after v2.1", category: "open", state: "open", labels: ["auth"], engagement: 17, escalated: false },
+    { id: "issue-4", number: 4, title: "Credential exposed in traceback", category: "security", state: "open", labels: ["security"], engagement: 60, escalated: true },
+    { id: "issue-6", number: 6, title: "Login returns 401 after upgrade", category: "duplicate", state: "open", labels: ["auth"], engagement: 5, escalated: false },
+    { id: "issue-247", number: 247, title: "Auth middleware rejects valid tokens", category: "resolved", state: "closed", labels: ["auth"], engagement: 31, escalated: false },
+  ],
+  links: [
+    { source: "issue-3", target: "issue-6", kind: "duplicate", score: 0.96, why: "0.96 cosine similarity" },
+    { source: "issue-3", target: "issue-4", kind: "similar", score: 0.78, why: "0.78 cosine similarity" },
+    { source: "issue-3", target: "issue-247", kind: "reference", score: 1, why: "#3 references #247" },
+  ],
+  stats: { node_count: 4, link_count: 3 },
+};
+
+function codeNode(
+  id: string,
+  symbol: string,
+  filePath: string,
+  kind: string,
+  cluster: string,
+  x: number,
+  y: number,
+  z: number,
+  status: CodeGraphNode["impact_status"] = "unaffected",
+  distance: number | null = null,
+): CodeGraphNode {
+  return {
+    id,
+    qualname: `${filePath}::${symbol}`,
+    symbol_name: symbol,
+    file_path: filePath,
+    kind,
+    runtime: filePath.startsWith("dashboard/") ? "browser" : "python",
+    language: filePath.endsWith(".py") ? "python" : "typescript",
+    start_line: 1,
+    end_line: 24,
+    cluster_label: cluster,
+    in_degree: 1,
+    out_degree: 1,
+    hub_score: 0.08,
+    x2d: x,
+    y2d: y,
+    x3d: x,
+    y3d: y,
+    z3d: z,
+    impact_status: status,
+    impact_distance: distance,
+  };
+}
+
+export const mockCodeGraph: CodeGraphResponse = {
+  repository: "aryabailur/Doombot",
+  nodes: [
+    codeNode("code-triage", "issue_app", "agents/triage_graph.py", "graph", "agents", -10, 1, 0),
+    codeNode("code-duplicate", "duplicate_detector_node", "agents/triage/duplicate_detector.py", "graph_node", "agents/triage", -7, 4, 2),
+    codeNode("code-security", "security_scanner_node", "agents/triage/security_scanner.py", "graph_node", "agents/triage", -6, 0, -2),
+    codeNode("code-impact", "impact_scorer_node", "agents/triage/impact_scorer.py", "graph_node", "agents/triage", -7, -4, 1),
+    codeNode("code-build", "build_code_graph", "rag/graph.py", "function", "rag", 0, 0, 0, "changed", 0),
+    codeNode("code-overlay", "_impact_overlay", "rag/graph.py", "function", "rag", 2, 3, 2, "changed", 0),
+    codeNode("code-route", "get_code_graph", "api/routes_repos.py", "api_handler", "api", 7, 3, 1, "ripple", 1),
+    codeNode("code-schema", "CodeGraphResponse", "api/schemas.py", "class", "api", 8, -1, -2, "ripple", 1),
+    codeNode("code-client", "getCodeGraph", "dashboard/src/lib/api.ts", "function", "dashboard/lib", 5, -6, 2, "ripple", 2),
+    codeNode("code-view", "IssueGraph", "dashboard/src/components/IssueGraph.tsx", "component", "dashboard/components", 0, -9, -1, "ripple", 2),
+    codeNode("code-app", "GraphPage", "dashboard/src/App.tsx", "component", "dashboard/root", -4, -7, 2),
+  ],
+  links: [
+    { source: "code-triage", target: "code-duplicate", edge_type: "calls", why: "issue_app calls duplicate_detector_node" },
+    { source: "code-triage", target: "code-security", edge_type: "calls", why: "issue_app calls security_scanner_node" },
+    { source: "code-triage", target: "code-impact", edge_type: "calls", why: "issue_app calls impact_scorer_node" },
+    { source: "code-build", target: "code-overlay", edge_type: "calls", why: "build_code_graph calls _impact_overlay" },
+    { source: "code-route", target: "code-build", edge_type: "calls", why: "get_code_graph calls build_code_graph" },
+    { source: "code-route", target: "code-schema", edge_type: "calls", why: "get_code_graph returns CodeGraphResponse" },
+    { source: "code-client", target: "code-route", edge_type: "http_calls", why: "getCodeGraph requests /api/repos/{owner}/{repo}/code-graph" },
+    { source: "code-app", target: "code-view", edge_type: "renders", why: "GraphPage renders IssueGraph" },
+    { source: "code-app", target: "code-client", edge_type: "calls", why: "GraphPage calls getCodeGraph" },
+  ],
+  stats: {
+    node_count: 11,
+    link_count: 9,
+    cluster_count: 6,
+    clusters: ["agents", "agents/triage", "rag", "api", "dashboard/lib", "dashboard/components"],
+    languages: ["python", "typescript"],
+    attribution: "Semantic graph adapted from GraphDev (MIT) for Doombot F15.",
+  },
+  impact: {
+    risk_level: "high",
+    changed_units: ["rag/graph.py::build_code_graph", "rag/graph.py::_impact_overlay"],
+    impacted_units: [
+      { qualname: "api/routes_repos.py::get_code_graph", distance: 1, edge_type: "calls" },
+      { qualname: "dashboard/src/lib/api.ts::getCodeGraph", distance: 2, edge_type: "http_calls" },
+      { qualname: "dashboard/src/components/IssueGraph.tsx::IssueGraph", distance: 2, edge_type: "renders" },
+    ],
+    cluster_impact: [
+      { cluster: "rag", impact_score: 1, changed_count: 2, ripple_count: 0, total_count: 2 },
+      { cluster: "api", impact_score: 0.5, changed_count: 0, ripple_count: 2, total_count: 2 },
+      { cluster: "dashboard/lib", impact_score: 0.5, changed_count: 0, ripple_count: 1, total_count: 1 },
+    ],
+    suggested_labels: ["high-impact", "rag", "api", "cross-subsystem"],
+  },
 };
