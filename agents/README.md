@@ -111,7 +111,7 @@ issue-relationship graph (F15) and the semantic code graph.
 | Issue + code graph (F15) | Live |
 | Resolution proposals (F16) | Live — approval-gated |
 | Adaptive repository learning (F17) | **Not built** — spec in `docs/INTELLIGENCE.md` |
-| MCP intelligence layer (F18) | **Not built** — spec in `docs/INTELLIGENCE.md` |
+| MCP intelligence layer (F18) | Live — 7 read-only tools, `mcp_server/intelligence.py` |
 
 **There is no OpenAI in this project.** Groq `openai/gpt-oss-120b` for
 inference, local MiniLM for embeddings. No `openai` package, no

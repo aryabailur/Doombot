@@ -95,9 +95,12 @@ silently lower confidence.
 
 ---
 
-## F18 — MCP intelligence layer
+## F18 — MCP intelligence layer — **BUILT**
 
-**Priority: P2, stretch. Stream B. Branch: `feat/b-mcp-intelligence`.**
+**Priority: P2, stretch. Stream B.** Implemented in
+`mcp_server/intelligence.py`, names in `tool_names.py` (`INTELLIGENCE_TOOLS`),
+guarded by `tests/test_mcp_intelligence.py`. The sections below describe what
+was built; `mcp_server/CLAUDE.md` §4b is the maintenance reference.
 
 ### The idea
 
