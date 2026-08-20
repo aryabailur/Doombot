@@ -42,14 +42,18 @@ const ForceGraph3D = lazy(() => import('react-force-graph-3d'))
  * -- which every caller relies on -- the mismatch is absorbed here, at the
  * single boundary where it exists.
  */
-type SimNode = GraphNode & { x?: number; y?: number }
+type SimNode = GraphNode & { x?: number; y?: number; vx?: number; vy?: number }
 type D3Force = {
   strength?: (v: number | ((node: SimNode) => number)) => void
   distance?: (v: number) => void
 }
+type CustomForce = {
+  (alpha: number): void
+  initialize?: (nodes: SimNode[]) => void
+}
 type GraphHandle = {
   zoomToFit: (ms: number, px: number) => void
-  d3Force: (name: string) => D3Force | undefined
+  d3Force: (name: string, force?: CustomForce) => D3Force | undefined
 }
 
 export type GraphCategory = IssueGraphCategory
@@ -225,6 +229,8 @@ function IssueRelationshipGraph({
   // Structural type rather than the library's ForceGraphMethods, which is
   // only reachable through the lazily-imported module.
   const graphRef = useRef<GraphHandle | null>(null)
+  /** Node list handed to us by the simulation, for the gravity force. */
+  const simNodes = useRef<SimNode[]>([])
   const [hidden, setHidden] = useState<Set<GraphCategory>>(new Set())
   const [selectedLink, setSelectedLink] = useState<GraphLink | null>(null)
 
@@ -264,7 +270,38 @@ function IssueRelationshipGraph({
       connectedIds.has(node.id) ? -260 : -40,
     )
     handle.d3Force('link')?.distance?.(70)
-    handle.d3Force('center')?.strength?.(0.06)
+
+    // A gravity force toward the origin, applied per node.
+    //
+    // NOT forceCenter: despite the name it does not attract anything. It
+    // computes the centroid and translates every node by the same offset, so
+    // relative positions are untouched -- it can never pull an orphan toward
+    // the cluster, and setting its strength below 1 only weakens that
+    // recentering. Orphans stayed exiled because nothing was pulling them in.
+    //
+    // Written by hand rather than imported from d3-force-3d: that package is
+    // a transitive dependency of react-force-graph, not one we declare, and
+    // importing it directly would add an undeclared dependency (root
+    // CLAUDE.md rule 10) for ~10 lines of arithmetic.
+    //
+    // Orphans are pulled ~4x harder so they gather near the middle instead of
+    // drifting to the corners, while connected clusters stay loose enough for
+    // the link forces to shape them.
+    const gravity = (alpha: number) => {
+      for (const node of simNodes.current) {
+        const pull = (connectedIds.has(node.id) ? 0.02 : 0.08) * alpha
+        if (node.x !== undefined) {
+          node.vx = (node.vx ?? 0) - node.x * pull
+        }
+        if (node.y !== undefined) {
+          node.vy = (node.vy ?? 0) - node.y * pull
+        }
+      }
+    }
+    gravity.initialize = (assigned: SimNode[]) => {
+      simNodes.current = assigned
+    }
+    handle.d3Force('doombotGravity', gravity)
   }, [connectedIds])
 
   const data = useMemo(() => {
