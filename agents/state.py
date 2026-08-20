@@ -8,5 +8,5 @@ class GraphState(TypedDict):
     pr_metadata:dict
     diff_files:list[dict]
     review_metadata:Annotated[list[dict],add]
-    test_metadata:list
+    test_metadata:str
     summary_metadata:str

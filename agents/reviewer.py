@@ -6,6 +6,7 @@ from langgraph.prebuilt import create_react_agent
 from agents.state import GraphState
 from dotenv import load_dotenv
 from rag.retriever import retrieve
+from mcp_server.tool_names import GET_FILE_CONTENT
 load_dotenv()
 from langchain_groq import ChatGroq
 llm = ChatGroq(model="llama-3.3-70b-versatile")
@@ -17,7 +18,7 @@ def get_full_file(repo_name:str,file_path:str)->str:
     
       server_params=StdioServerParameters(
         command="python",
-        args=["mcp_server/server.py"]
+        args=["-m", "mcp_server.server"]
       )
       async with stdio_client(server_params) as(
         read_stream,
@@ -29,7 +30,7 @@ def get_full_file(repo_name:str,file_path:str)->str:
          ) as session:
              await session.initialize()
              result=await session.call_tool(
-                "get_file_content",
+                GET_FILE_CONTENT,
                 {
                     "repo_name":repo_name,
                     "file_path":file_path

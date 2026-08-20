@@ -120,37 +120,46 @@ Do not create files outside this tree without updating this table first
 
 ---
 
-## 4. Design tokens — copied verbatim from DESIGN.md §8
+## 4. Design tokens — NEO-BRUTALIST (supersedes DESIGN.md §8)
 
-**Do not restate these from memory, do not "improve" the palette, do not use
-a default Tailwind color or a raw hex anywhere in `dashboard/`.** Every color
-in the UI must resolve to one of these tokens. This is graded — a PR that
-introduces `bg-gray-800` or `text-red-500` is not mergeable.
+**Superseded 2026-08-20 by explicit product decision: the dashboard uses a
+neo-brutalist visual language, not the dark-green "agent surveillance" theme
+DESIGN.md §8 originally specified.** Do not restate the old dark-green
+tokens from memory — they are dead. Do not invent a raw hex or a default
+Tailwind color outside this list either; the *rule* that every color must
+resolve to a token still applies, only the palette changed.
+
+Neo-brutalism here means: pure flat color fields, thick black borders (3–4px),
+hard offset drop-shadows (no blur), no gradients, oversized confident
+type, visible grid structure. Reference points: Gumroad, Figma community
+brutalist kits, Linear's early brutalist marketing pages.
 
 Put this in `src/index.css`, under `@layer base`:
 
 ```css
 :root {
-  --background: #070a08;
-  --surface-1: #0d120f;
-  --surface-2: #101713;
-  --surface-3: #17211b;
-  --border: #24332a;
+  --background: #fdf8f3;
+  --surface-1: #ffffff;
+  --surface-2: #fff2d6;
+  --surface-3: #e8e4ff;
+  --border: #0a0a0a;
 
-  --text-primary: #f1f5f2;
-  --text-secondary: #b6c2ba;
-  --text-muted: #87958c;
+  --text-primary: #0a0a0a;
+  --text-secondary: #3a3a3a;
+  --text-muted: #6b6b6b;
 
-  --accent: #22c55e;
-  --accent-bright: #4ade80;
-  --accent-muted: #163d25;
+  --accent: #ff5c38;
+  --accent-bright: #ff8a65;
+  --accent-muted: #ffe0d6;
 
-  --critical: #f43f5e;
-  --high: #fb7185;
-  --warning: #f59e0b;
-  --information: #38bdf8;
-  --success: #22c55e;
-  --neutral: #94a3b8;
+  --critical: #ff2d55;
+  --high: #ff6b35;
+  --warning: #ffc700;
+  --information: #2d7dff;
+  --success: #00c853;
+  --neutral: #9c9c9c;
+
+  --shadow-color: #0a0a0a;
 }
 ```
 
@@ -187,13 +196,20 @@ export default {
         success: "var(--success)",
         neutral: "var(--neutral)",
       },
+      boxShadow: {
+        brutal: "4px 4px 0 0 var(--shadow-color)",
+        "brutal-sm": "2px 2px 0 0 var(--shadow-color)",
+        "brutal-lg": "8px 8px 0 0 var(--shadow-color)",
+      },
     },
   },
 };
 ```
 
-Usage: `bg-surface-2`, `text-text-secondary`, `border-border`, `text-critical`.
-**Never** `bg-[#101713]`, **never** `bg-slate-800`.
+Usage: `bg-surface-2`, `text-text-secondary`, `border-border`, `text-critical`,
+`shadow-brutal`. Every card/button/input gets `border-2 border-border
+shadow-brutal` (or `-sm`/`-lg`) — flat shadows only, never `shadow-md`/`shadow-lg`
+from default Tailwind. **Never** `bg-[#101713]`, **never** `bg-slate-800`.
 
 ---
 

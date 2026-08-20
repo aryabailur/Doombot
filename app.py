@@ -12,9 +12,10 @@ if __name__ == "__main__":
     "pr_metadata":{},
     "diff_files":[],
     "review_metadata":[],
-    "test_metadata":[],
+    "test_metadata":"",
     "summary_metadata":""
      }
-    embeder(repo_name)
+    if input("Re-index repo before review? (y/N): ").strip().lower() == "y":
+        embeder(repo_name)
     result=app.invoke(initial_state)
     print(result["summary_metadata"])

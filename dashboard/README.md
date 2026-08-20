@@ -1,24 +1,32 @@
-# Doombot Dashboard
+# React + TypeScript + Vite
 
-React + Vite + TypeScript + Tailwind + shadcn/ui. The primary product surface (F13).
+This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
 
-**Not yet scaffolded.** See [CLAUDE.md](CLAUDE.md) §3 for the exact commands.
+Currently, two official plugins are available:
 
-## Read before working here
+- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
+- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
 
-| File | What |
-|---|---|
-| [CLAUDE.md](CLAUDE.md) | **Shared frontend rules — tokens, UI states, a11y, safety, WS strategy** |
-| [FRONTEND-C.md](FRONTEND-C.md) | Person C — investigation trace, evidence, comparison |
-| [FRONTEND-D.md](FRONTEND-D.md) | Person D — shell, overview, escalations, health |
-| [../docs/DESIGN.md](../docs/DESIGN.md) | Design source of truth — screens, tokens, safety |
+## React Compiler
 
-## Quick start
+The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
 
-```bash
-npm install
-npm run dev        # http://localhost:5173
+## Expanding the Oxlint configuration
+
+If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
+
+```json
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["react", "typescript", "oxc"],
+  "options": {
+    "typeAware": true
+  },
+  "rules": {
+    "react/rules-of-hooks": "error",
+    "react/only-export-components": ["warn", { "allowConstantExport": true }]
+  }
+}
 ```
 
-Backend runs on `:8000`. Set `VITE_USE_MOCKS=true` in `.env.local` to run with no
-backend at all.
+See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.

@@ -1,8 +1,8 @@
 from mcp.server.fastmcp import FastMCP
-from github_client import get_pr_files
-from github_client import get_file_content
-from github_client import get_pr_details
-from github_client import post_review_comment
+from mcp_server.github_client import get_pr_files
+from mcp_server.github_client import get_file_content
+from mcp_server.github_client import get_pr_details
+from mcp_server.github_client import post_review_comment
 import json
 
 mcp=FastMCP("Github reviewer")

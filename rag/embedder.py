@@ -1,10 +1,18 @@
 from mcp_server.github_client import get_repo_files
 from mcp_server.github_client import get_file_content
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.documents import Document
 from langchain_chroma import Chroma
-model=HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+
+_model = None
+
+
+def _get_model():
+    global _model
+    if _model is None:
+        _model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    return _model
 
 
 def embeder(repo_name):
@@ -25,7 +33,7 @@ def embeder(repo_name):
 
     vector_db=Chroma.from_documents(
         documents=split_file_content_doc,
-        embedding=model,
+        embedding=_get_model(),
         persist_directory="./chroma_db",
         collection_name=repo_name.replace("/","-")
     )
