@@ -14,6 +14,7 @@ Two modes behind one interface, selected by the USE_MCP_SUBPROCESS env var:
 import asyncio
 import json
 import os
+import threading
 from contextlib import AsyncExitStack
 
 from mcp import ClientSession, StdioServerParameters
@@ -95,18 +96,45 @@ async def call(tool_name: str, args: dict) -> str:
 
 
 def call_tool_sync(tool_name: str, args: dict) -> str:
-    """Sync wrapper around `call()`, for the sync LangChain @tool functions
-    in agents/reviewer.py (LangChain tools are sync callables; the graph
-    itself is async)."""
+    """Sync wrapper around `call()`. Used by sync LangChain @tool functions
+    (agents/reviewer.py) and by sync LangGraph nodes (agents/triage/*.py)
+    invoked from inside an async graph run (issue_app.astream)."""
     try:
-        asyncio.get_running_loop()
+        running_loop = asyncio.get_running_loop()
     except RuntimeError:
+        running_loop = None
+
+    if running_loop is None:
         return asyncio.run(call(tool_name, args))
-    else:
-        if _loop is None:
-            raise RuntimeError(
-                "mcp_server.client: call_tool_sync() from within a running "
-                "loop requires startup() to have run first"
-            )
-        future = asyncio.run_coroutine_threadsafe(call(tool_name, args), _loop)
-        return future.result()
+
+    if running_loop is _loop:
+        # Self-deadlock guard: a sync LangGraph node is executing inside
+        # issue_app.astream(...), which is itself running ON `_loop` (the
+        # loop captured by mcp_server.client.startup() at FastAPI startup).
+        # run_coroutine_threadsafe(coro, _loop) schedules `coro` onto
+        # `_loop` and then blocks the CURRENT call with future.result() —
+        # but the current call IS `_loop` executing this very node, so
+        # `_loop` can never get free to run the scheduled coroutine. That
+        # blocks forever (reproduced independently — hangs on GET_ISSUE
+        # against a real repo, indistinguishable from a slow network call
+        # until you notice 0% CPU). Route around it: run `call()` to
+        # completion on a fresh loop in a separate thread instead of
+        # scheduling back onto the loop that's currently blocked on us.
+        result: list[str] = []
+        error: list[BaseException] = []
+
+        def _run_in_new_loop() -> None:
+            try:
+                result.append(asyncio.run(call(tool_name, args)))
+            except BaseException as exc:  # noqa: BLE001 - re-raised on the caller's thread below
+                error.append(exc)
+
+        thread = threading.Thread(target=_run_in_new_loop)
+        thread.start()
+        thread.join()
+        if error:
+            raise error[0]
+        return result[0]
+
+    future = asyncio.run_coroutine_threadsafe(call(tool_name, args), _loop)
+    return future.result()

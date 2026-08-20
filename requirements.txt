@@ -11,7 +11,7 @@ langchain-community
 sentence-transformers
 chromadb
 PyGithub
-mcp>=1.28
+mcp>=1.28,<2.0
 fastapi
 uvicorn[standard]
 python-dotenv

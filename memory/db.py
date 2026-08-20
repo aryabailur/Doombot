@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS chain_steps (
     evidence_json TEXT,
     duration_ms INTEGER,
     started_at TEXT NOT NULL,
-    ended_at TEXT
+    ended_at TEXT,
+    tool_calls_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS escalations (
@@ -65,8 +66,22 @@ CREATE TABLE IF NOT EXISTS feedback (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS suggested_actions (
+    action_id TEXT PRIMARY KEY,
+    investigation_id TEXT NOT NULL,
+    repo_name TEXT NOT NULL,
+    number INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_steps_inv ON chain_steps(investigation_id, seq);
 CREATE INDEX IF NOT EXISTS idx_inv_repo ON investigations(repo_name, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_actions_inv ON suggested_actions(investigation_id);
 """
 
 
@@ -88,4 +103,15 @@ def init_db() -> None:
     statement from the DDL, then commit. Idempotent."""
     conn = get_conn()
     conn.executescript(_DDL)
+    _migrate_add_columns(conn)
     conn.commit()
+
+
+def _migrate_add_columns(conn: sqlite3.Connection) -> None:
+    """CREATE TABLE IF NOT EXISTS doesn't add columns to a table that
+    already exists from an earlier run — that requires ALTER TABLE. Guard
+    each ADD COLUMN so re-running against an already-migrated DB is a
+    no-op instead of an error."""
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(chain_steps)")}
+    if "tool_calls_json" not in existing:
+        conn.execute("ALTER TABLE chain_steps ADD COLUMN tool_calls_json TEXT")

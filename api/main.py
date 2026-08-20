@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from memory.db import init_db
+from memory import repo
 from mcp_server import client as mcp_client
 from api.ws import websocket_endpoint
 from api.routes_repos import router as repos_router
@@ -22,6 +23,7 @@ from api.routes_feedback import router as feedback_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    repo.reconcile_orphaned_investigations()
     await mcp_client.startup()
     yield
     await mcp_client.shutdown()

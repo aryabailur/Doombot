@@ -1,5 +1,6 @@
 from mcp_server.github_client import get_repo_files
 from mcp_server.github_client import get_file_content
+from mcp_server.github_client import get_issues
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.documents import Document
@@ -35,8 +36,46 @@ def embeder(repo_name):
         documents=split_file_content_doc,
         embedding=_get_model(),
         persist_directory="./chroma_db",
-        collection_name=repo_name.replace("/","-")
+        collection_name=repo_name.replace("/","-")+"-code",
+        collection_metadata={"hnsw:space": "cosine"},
     )
+    return vector_db
+
+
+def index_issues(repo_name: str, state: str = "all", limit: int = 100):
+    """Index repo issues into a dedicated {repo}-issues collection.
+
+    One Document per issue, unchunked (chunking destroys duplicate
+    detection by comparing fragments instead of whole issues). Chroma
+    upserts by id, so re-running is idempotent and cheap.
+    """
+    issues = get_issues(repo_name, state=state, limit=limit)
+    docs = []
+    ids = []
+    for issue in issues:
+        docs.append(
+            Document(
+                page_content=f"{issue['title']}\n\n{issue['body']}",
+                metadata={
+                    "type": "issue",
+                    "number": issue["number"],
+                    "state": issue["state"],
+                    "labels": ",".join(issue.get("labels", [])),
+                },
+            )
+        )
+        ids.append(f"issue-{issue['number']}")
+
+    if not docs:
+        return None
+
+    vector_db = Chroma(
+        persist_directory="./chroma_db",
+        embedding_function=_get_model(),
+        collection_name=repo_name.replace("/", "-") + "-issues",
+        collection_metadata={"hnsw:space": "cosine"},
+    )
+    vector_db.add_documents(docs, ids=ids)
     return vector_db
 
 

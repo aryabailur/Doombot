@@ -28,6 +28,7 @@ class StepRecord(BaseModel):
     duration_ms: int
     started_at: str
     ended_at: str | None
+    tool_calls: list[str] = []
 
 
 class InvestigationSummary(BaseModel):
@@ -70,10 +71,20 @@ class HealthPoint(BaseModel):
     score: float
 
 
+class HealthForecast(BaseModel):
+    horizon_days: int
+    projected_score: float
+    projected_backlog: float | None
+    confidence: float
+    trend: Literal["improving", "stable", "declining"]
+    reason: str
+
+
 class HealthResponse(BaseModel):
     score: float
     breakdown: HealthBreakdown
     history: list[HealthPoint]
+    forecast: HealthForecast | None = None
 
 
 class RepoSummary(BaseModel):
@@ -104,3 +115,51 @@ class BriefResponse(BaseModel):
 class IndexJobResponse(BaseModel):
     job_id: str
     status: str
+
+
+class MemoryQueryResult(BaseModel):
+    item_id: str
+    type: str
+    title: str
+    score: float
+    reason: str
+    number: int | None
+    url: str | None
+
+
+class MemoryQueryResponse(BaseModel):
+    query: str
+    results: list[MemoryQueryResult]
+
+
+class ActivityEvent(BaseModel):
+    ts: str
+    investigation_id: str
+    repo_name: str
+    kind: str
+    message: str
+    severity: str
+    number: int | None
+
+
+class ActivityPage(BaseModel):
+    events: list[ActivityEvent]
+    next_cursor: str | None
+
+
+class SuggestedAction(BaseModel):
+    action_id: str
+    investigation_id: str
+    repo_name: str
+    number: int
+    kind: Literal["add_labels", "post_comment"]
+    payload: dict
+    reason: str
+    confidence: float
+    status: Literal["pending", "approved", "rejected"]
+    created_at: str
+
+
+class ApproveActionResponse(BaseModel):
+    ok: bool
+    result: str
