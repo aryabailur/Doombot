@@ -24,8 +24,10 @@ import { EmptyState } from '@/components/EmptyState'
 import { ErrorState } from '@/components/ErrorState'
 import { SkeletonState } from '@/components/SkeletonState'
 import { AppShell } from '@/components/AppShell'
+import { InvestigationList } from '@/components/InvestigationList'
 import { IssueGraph } from '@/components/IssueGraph'
 import * as d from '@/demo/demoData'
+import * as m from '@/lib/mocks'
 
 const checks: [string, () => string][] = [
   ['EmptyState', () => renderToString(<EmptyState title="None" />)],
@@ -48,6 +50,9 @@ const checks: [string, () => string][] = [
   ['AppShell', () => renderToString(<MemoryRouter><AppShell>content</AppShell></MemoryRouter>)],
   ['IssueGraph', () => renderToString(<IssueGraph nodes={d.demoGraphNodes} links={d.demoGraphLinks} />)],
   ['IssueGraph/empty', () => renderToString(<IssueGraph nodes={[]} links={[]} />)],
+  ['InvestigationList', () => renderToString(<InvestigationList investigations={m.mockInvestigations} onSelect={()=>{}} />)],
+  ['InvestigationList/loading', () => renderToString(<InvestigationList investigations={null} onSelect={()=>{}} />)],
+  ['InvestigationList/error', () => renderToString(<InvestigationList investigations={[]} error="boom" onSelect={()=>{}} />)],
 ]
 
 let failed = 0
