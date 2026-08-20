@@ -87,3 +87,34 @@ def test_node_never_imports_persistence_or_transport():
         src = path.read_text(encoding="utf-8")
         assert "from memory" not in src and "import memory" not in src, path
         assert "from api" not in src and "import api" not in src, path
+
+
+def test_stream_envelope_uses_data_key():
+    """Events must be {type, data}, not {type, step}.
+
+    api/CLAUDE.md and dashboard/CLAUDE.md both specify `data`, and Stream C's
+    useSocket hook rejects any event lacking it -- so an envelope mismatch
+    silently drops every step from the live trace while the backend looks
+    perfectly healthy. This test is the only thing that catches it without
+    running both halves together.
+    """
+    from langgraph.graph import END, START, StateGraph
+
+    from agents.state import GraphState
+
+    @chain_step("t", "T")
+    def node(state):
+        return {}
+
+    graph = StateGraph(GraphState)
+    graph.add_node("t", node)
+    graph.add_edge(START, "t")
+    graph.add_edge("t", END)
+    app = graph.compile()
+
+    events = list(app.stream({"chain": []}, stream_mode="custom"))
+    assert events, "no custom events emitted"
+    for event in events:
+        assert set(event) == {"type", "data"}, event
+        assert event["type"] in {"step.started", "step.completed"}
+        assert set(event["data"]) == STEP_KEYS
