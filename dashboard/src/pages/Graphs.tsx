@@ -102,6 +102,7 @@ export function Graphs() {
   const [selectedCode, setSelectedCode] = useState<
     CodeGraphResponseApi["nodes"][number] | null
   >(null);
+  const [runtimes, setRuntimes] = useState<Set<string>>(new Set());
 
   const [owner, repo] = repoName.split("/");
 
@@ -226,6 +227,12 @@ export function Graphs() {
     return { nodeIds, edges };
   }, [hoveredId, issueGraph]);
 
+  /** The hovered issue itself, for the caption line under the canvas. */
+  const hoveredIssue = useMemo(
+    () => (issueGraph?.nodes ?? []).find((n) => n.id === hoveredId) ?? null,
+    [issueGraph, hoveredId]
+  );
+
   const categoryCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const node of issueGraph?.nodes ?? []) {
@@ -286,9 +293,29 @@ export function Graphs() {
 
   // ---- code graph --------------------------------------------------------
 
+  /**
+   * Distinct values per filterable dimension, with counts.
+   *
+   * A filter offering one option is noise, not a control -- every symbol in
+   * express is runtime "shared", so a runtime filter there would just take up
+   * space. Each control below renders only when its dimension actually varies.
+   */
+  const codeFacets = useMemo(() => {
+    const clusters = new Map<string, number>();
+    const runtimeCounts = new Map<string, number>();
+    for (const node of codeGraph?.nodes ?? []) {
+      clusters.set(node.cluster_label, (clusters.get(node.cluster_label) ?? 0) + 1);
+      runtimeCounts.set(node.runtime, (runtimeCounts.get(node.runtime) ?? 0) + 1);
+    }
+    return { clusters, runtimes: runtimeCounts };
+  }, [codeGraph]);
+
   const codeData = useMemo(() => {
     const nodes = (codeGraph?.nodes ?? []).filter((n) => {
       if (subsystem && n.cluster_label !== subsystem) return false;
+      // An empty set means "no restriction" rather than "hide everything", so
+      // the filters start open.
+      if (runtimes.size > 0 && !runtimes.has(n.runtime)) return false;
       if (minDegree > 0 && n.in_degree + n.out_degree < minDegree) return false;
       return true;
     });
@@ -532,10 +559,11 @@ export function Graphs() {
                     return 0.8 + link.score * 1.2;
                   }}
                   nodeCanvasObject={paintIssueNode}
-                  nodeLabel={(raw) => {
-                    const node = raw as IssueGraphNodeApi;
-                    return `#${node.number} — ${node.title}`;
-                  }}
+                  // The library tooltip is a floating black box that
+                  // follows the cursor and covers the very neighbours the
+                  // hover exists to reveal. The same information is in the
+                  // panel below and the caption, which occlude nothing.
+                  nodeLabel={() => ""}
                   onLinkClick={(raw) => setSelectedLink(raw as IssueGraphLinkApi)}
                   onNodeHover={(raw) =>
                     setHoveredId(raw ? (raw as IssueGraphNodeApi).id : null)
@@ -554,6 +582,17 @@ export function Graphs() {
               </span>{" "}
               — {selectedLink.why}
             </p>
+          ) : hoveredIssue ? (
+            // Replaces the tooltip that used to float over the canvas: same
+            // information, in a fixed place, covering nothing.
+            <p className="rounded-xl border border-border bg-card px-4 py-3 text-sm text-ink shadow-flat-sm">
+              <span className="font-mono font-bold">#{hoveredIssue.number}</span>{" "}
+              — {hoveredIssue.title}
+              <span className="ml-2 text-xs text-muted">
+                {CATEGORY_LABEL[hoveredIssue.category] ?? hoveredIssue.category}
+                {hoveredIssue.escalated ? " · escalated" : ""}
+              </span>
+            </p>
           ) : (
             <p className="text-xs text-muted">
               Hover an issue to light its connections. Click a line to see why two
@@ -568,15 +607,46 @@ export function Graphs() {
             <select
               value={subsystem}
               onChange={(event) => setSubsystem(event.target.value)}
-              className="rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-bold text-ink shadow-flat-sm"
+              className="rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-bold text-ink shadow-flat-sm focus-visible:outline-2 focus-visible:outline-ink"
             >
               <option value="">All subsystems</option>
-              {(codeGraph?.stats.clusters ?? []).map((cluster) => (
-                <option key={cluster} value={cluster}>
-                  {cluster}
-                </option>
-              ))}
+              {[...codeFacets.clusters.entries()]
+                .sort((a, b) => b[1] - a[1])
+                .map(([cluster, count]) => (
+                  <option key={cluster} value={cluster}>
+                    {cluster} ({count})
+                  </option>
+                ))}
             </select>
+
+            {/* Runtime, only when it varies. Every symbol in express is
+                "shared", so a control with one option would be noise. */}
+            {codeFacets.runtimes.size > 1
+              ? [...codeFacets.runtimes.entries()]
+                  .sort((a, b) => b[1] - a[1])
+                  .map(([runtime, count]) => {
+                    const on = runtimes.has(runtime);
+                    return (
+                      <button
+                        key={runtime}
+                        aria-pressed={on}
+                        onClick={() =>
+                          setRuntimes((current) => {
+                            const next = new Set(current);
+                            if (next.has(runtime)) next.delete(runtime);
+                            else next.add(runtime);
+                            return next;
+                          })
+                        }
+                        className={`rounded-lg border border-border px-2.5 py-1.5 text-xs font-bold shadow-flat-sm transition-colors ${
+                          on ? "bg-ink text-white" : "bg-card text-ink opacity-70"
+                        }`}
+                      >
+                        {runtime} {count}
+                      </button>
+                    );
+                  })
+              : null}
 
             <label className="flex items-center gap-2 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-bold text-ink shadow-flat-sm">
               Min connections
@@ -590,6 +660,22 @@ export function Graphs() {
               />
               <span className="w-3 font-mono">{minDegree}</span>
             </label>
+
+            {/* Reset. The initial min-connections floor is chosen for the
+                repository's size, so "show all" has to mean 0 rather than
+                that default -- otherwise the full graph is unreachable. */}
+            {subsystem || runtimes.size > 0 || minDegree > 0 ? (
+              <button
+                onClick={() => {
+                  setSubsystem("");
+                  setRuntimes(new Set());
+                  setMinDegree(0);
+                }}
+                className="rounded-lg px-2 py-1.5 text-xs font-bold text-muted hover:text-ink"
+              >
+                Show all
+              </button>
+            ) : null}
 
             <span className="ml-auto font-mono text-xs text-muted">
               {codeData.nodes.length} of {codeGraph?.nodes.length ?? 0} symbols ·{" "}
@@ -647,10 +733,11 @@ export function Graphs() {
                     return codeFocus.edges.has(linkKey(link)) ? 2.2 : 0.35;
                   }}
                   nodeCanvasObject={paintCodeNode}
-                  nodeLabel={(raw) => {
-                    const node = raw as CodeGraphResponseApi["nodes"][number];
-                    return `${node.qualname}\n${node.file_path}:${node.start_line}`;
-                  }}
+                  // The library tooltip is a floating black box that
+                  // follows the cursor and covers the very neighbours the
+                  // hover exists to reveal. The same information is in the
+                  // panel below and the caption, which occlude nothing.
+                  nodeLabel={() => ""}
                   onNodeClick={(raw) =>
                     setSelectedCode(
                       raw as CodeGraphResponseApi["nodes"][number]
