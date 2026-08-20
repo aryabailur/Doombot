@@ -17,12 +17,13 @@ from mcp.client.stdio import stdio_client
 from agents.chain import chain_step
 from agents.state import GraphState
 from mcp_server.tool_names import GET_ISSUE
+import sys
 
 # `-m mcp_server.server`, not `mcp_server/server.py`. The -m form puts the
 # repo root on sys.path, so the server's absolute imports resolve. Running it
 # as a script makes cwd the only path entry and the imports fail.
 _SERVER_PARAMS = StdioServerParameters(
-    command="python",
+    command=sys.executable,
     args=["-m", "mcp_server.server"],
 )
 

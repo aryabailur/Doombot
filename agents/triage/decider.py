@@ -21,13 +21,14 @@ from mcp.client.stdio import stdio_client
 from agents.chain import chain_step
 from agents.state import GraphState
 from mcp_server.tool_names import ADD_LABELS, GET_ISSUE_COMMENTS, POST_ISSUE_COMMENT
+import sys
 
 # Above this, an issue is worth a maintainer's attention on impact alone.
 HIGH_IMPACT_THRESHOLD = 70
 
 # See _SERVER_PARAMS note in issue_fetcher: -m form puts repo root on sys.path.
 _SERVER_PARAMS = StdioServerParameters(
-    command="python",
+    command=sys.executable,
     args=["-m", "mcp_server.server"],
 )
 

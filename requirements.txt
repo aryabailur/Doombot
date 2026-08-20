@@ -12,7 +12,7 @@ langchain-community
 sentence-transformers
 chromadb
 PyGithub
-mcp>=1.28
+mcp>=1.28,<2  # 2.0 removed mcp.server.fastmcp (FastMCP -> MCPServer)
 fastapi
 uvicorn[standard]
 python-dotenv

@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from rag.retriever import retrieve
 load_dotenv()
 from langchain_groq import ChatGroq
+import sys
 llm = ChatGroq(model="openai/gpt-oss-120b")
 
 @tool
@@ -17,7 +18,7 @@ def get_full_file(repo_name:str,file_path:str)->str:
     async def call_tool():
     
       server_params=StdioServerParameters(
-        command="python",
+        command=sys.executable,
         args=["-m", "mcp_server.server"]
       )
       async with stdio_client(server_params) as(
