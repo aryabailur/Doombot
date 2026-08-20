@@ -3,26 +3,32 @@
     GET  /api/health                          -> {status: "ok"}
     GET  /api/repos                           -> list with health scores
     POST /api/repos/{owner}/{repo}/index      -> trigger RAG indexing
+    GET  /api/repos/{owner}/{repo}/graph      -> issue relationship graph
+    GET  /api/repos/{owner}/{repo}/code-graph -> semantic code + impact graph
     GET  /api/repos/{owner}/{repo}/health     -> score + breakdown + history
     GET  /api/brief/{owner}/{repo}            -> weekly brief markdown
 
-Fixture phase (see api/CLAUDE.md §2): every route below returns a
-hardcoded instance of the matching Pydantic model. No RAG/health-scoring
-logic and no DB access yet — that comes in a later pass.
+Repository summaries, health, and briefs remain fixtures. The two F15 graph
+routes are real read-only views over indexed issues and repository source.
 """
 import uuid
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from api.schemas import (
     BriefResponse,
+    CodeGraphResponse,
+    GraphResponse,
     HealthBreakdown,
     HealthPoint,
     HealthResponse,
     IndexJobResponse,
     RepoSummary,
 )
+from memory import repo as memory_repo
+from rag.graph import build_code_graph, build_graph
 
 # Tunable constants — health score weights (api/CLAUDE.md §8).
 # Unused during the fixture phase; wired up when real scoring lands.
@@ -71,7 +77,62 @@ async def list_repos() -> list[RepoSummary]:
 
 @router.post("/api/repos/{owner}/{repo}/index", response_model=IndexJobResponse)
 async def trigger_index(owner: str, repo: str) -> IndexJobResponse:
+    _cached_code_graph.cache_clear()
     return IndexJobResponse(job_id=str(uuid.uuid4()), status="queued")
+
+
+def _escalated_issue_numbers(repo_name: str) -> set[int]:
+    numbers: set[int] = set()
+    try:
+        for escalation in memory_repo.list_escalations(resolved=False):
+            if escalation.get("repo_name") != repo_name:
+                continue
+            investigation = memory_repo.get_investigation(
+                escalation["investigation_id"]
+            )
+            if investigation and investigation.get("kind") == "issue":
+                numbers.add(int(investigation["number"]))
+    except Exception:
+        # The graph is still useful before SQLite has been initialized.
+        return set()
+    return numbers
+
+
+@router.get(
+    "/api/repos/{owner}/{repo}/graph",
+    response_model=GraphResponse,
+)
+def get_issue_graph(owner: str, repo: str) -> GraphResponse:
+    repo_name = f"{owner}/{repo}"
+    return GraphResponse.model_validate(
+        build_graph(repo_name, _escalated_issue_numbers(repo_name))
+    )
+
+
+@lru_cache(maxsize=8)
+def _cached_code_graph(repo_name: str, changed_paths: tuple[str, ...]) -> dict:
+    return build_code_graph(repo_name, changed_paths)
+
+
+@router.get(
+    "/api/repos/{owner}/{repo}/code-graph",
+    response_model=CodeGraphResponse,
+)
+def get_code_graph(
+    owner: str,
+    repo: str,
+    changed_path: list[str] = Query(default=[]),
+) -> CodeGraphResponse:
+    """Return semantic code structure with an optional impact overlay.
+
+    Repeat `changed_path` to model all files touched by a pull request. Graph
+    construction is deterministic and read-only; the small cache keeps tab
+    changes responsive and is invalidated when repository indexing is
+    requested.
+    """
+    repo_name = f"{owner}/{repo}"
+    graph = _cached_code_graph(repo_name, tuple(sorted(set(changed_path))))
+    return CodeGraphResponse.model_validate(graph)
 
 
 @router.get("/api/repos/{owner}/{repo}/health", response_model=HealthResponse)
