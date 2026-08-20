@@ -1,4 +1,4 @@
-import { BrainCircuit, Github, WifiOff } from 'lucide-react'
+import { BrainCircuit, GitBranch, WifiOff } from 'lucide-react'
 
 import type { ConnectionState } from '@/lib/useSocket'
 import { formatRelativeTime } from '@/lib/format'
@@ -54,7 +54,7 @@ export function AgentStatusIndicator({
 
       <span className="flex items-center gap-1.5 text-xs">
         {githubConnected ? (
-          <Github aria-hidden="true" className="size-4 shrink-0 text-accent" />
+          <GitBranch aria-hidden="true" className="size-4 shrink-0 text-accent" />
         ) : (
           <WifiOff
             aria-hidden="true"

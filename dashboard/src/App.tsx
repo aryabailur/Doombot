@@ -1,122 +1,228 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
-import './App.css'
+import { useMemo, useState } from 'react'
+import {
+  BrowserRouter,
+  Navigate,
+  Route,
+  Routes,
+  useNavigate,
+} from 'react-router-dom'
 
-function App() {
-  const [count, setCount] = useState(0)
+import { AgentActivityFeed } from '@/components/AgentActivityFeed'
+import { AgentStatusIndicator } from '@/components/AgentStatusIndicator'
+import { AppShell } from '@/components/AppShell'
+import { EmptyState } from '@/components/EmptyState'
+import {
+  EscalationTable,
+  type EscalationFilters,
+  type EscalationRow,
+} from '@/components/EscalationTable'
+import { EscalationPreview } from '@/components/EscalationPreview'
+import { HealthMetricBreakdown } from '@/components/HealthMetricBreakdown'
+import { HealthScoreCard } from '@/components/HealthScoreCard'
+import { HealthTrendChart } from '@/components/HealthTrendChart'
+import {
+  RepositorySelector,
+  type RepoSummary,
+} from '@/components/RepositorySelector'
+import {
+  demoActivity,
+  demoEscalations,
+  demoHealthComponents,
+  demoHealthTrend,
+  demoRepos,
+} from '@/demo/demoData'
+
+/**
+ * Shared app state.
+ *
+ * Deliberately plain React state rather than a store: five screens and one
+ * selected repository do not justify a state library, and the API layer
+ * (Stream A) will own the real fetching.
+ *
+ * Data comes from `demoData` until Stream A's endpoints exist. Every page
+ * below is wired to props, so swapping fixtures for fetch calls touches only
+ * this file.
+ */
+function useAppState() {
+  const [selectedRepo, setSelectedRepo] = useState<RepoSummary>(demoRepos[0])
+  const [isIndexing, setIsIndexing] = useState(false)
+  const [escalations, setEscalations] =
+    useState<EscalationRow[]>(demoEscalations)
+
+  const overallHealth = useMemo(() => {
+    const weighted = demoHealthComponents.reduce(
+      (total, component) => total + component.score * component.weight,
+      0,
+    )
+    return Math.round(weighted)
+  }, [])
+
+  const setStatus = (id: string, status: EscalationRow['status']) => {
+    setEscalations((rows) =>
+      rows.map((row) => (row.id === id ? { ...row, status } : row)),
+    )
+  }
+
+  return {
+    selectedRepo,
+    setSelectedRepo,
+    isIndexing,
+    setIsIndexing,
+    escalations,
+    setStatus,
+    overallHealth,
+  }
+}
+
+type AppState = ReturnType<typeof useAppState>
+
+function OverviewPage({ state }: { state: AppState }) {
+  const critical = state.escalations.filter(
+    (row) => row.severity === 'critical',
+  ).length
+  const pending = state.escalations.filter(
+    (row) => row.status === 'pending',
+  ).length
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
+    <div className="flex flex-col gap-4">
+      <div className="grid gap-4 lg:grid-cols-3">
+        <HealthScoreCard
+          components={demoHealthComponents}
+          overallScore={state.overallHealth}
+          trend="up"
+        />
+        <section
+          aria-label="Escalation summary"
+          className="flex flex-col justify-center gap-3 rounded-xl border border-border bg-surface-1 p-4"
         >
-          Count is {count}
-        </button>
-      </section>
+          <div>
+            <p className="text-3xl font-semibold tabular-nums text-critical">
+              {critical}
+            </p>
+            <p className="text-xs text-text-muted">critical escalations</p>
+          </div>
+          <div>
+            <p className="text-3xl font-semibold tabular-nums text-warning">
+              {pending}
+            </p>
+            <p className="text-xs text-text-muted">awaiting a maintainer</p>
+          </div>
+        </section>
+        <AgentActivityFeed items={demoActivity} maxItems={6} />
+      </div>
 
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
+      <HealthTrendChart data={demoHealthTrend} />
+    </div>
   )
 }
 
-export default App
+function EscalationsPage({ state }: { state: AppState }) {
+  const navigate = useNavigate()
+  const [filters, setFilters] = useState<EscalationFilters>({})
+  const [selectedId, setSelectedId] = useState<string | undefined>(
+    state.escalations[0]?.id,
+  )
+  const selected =
+    state.escalations.find((row) => row.id === selectedId) ?? null
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+      <EscalationTable
+        filters={filters}
+        onFiltersChange={setFilters}
+        onSelect={setSelectedId}
+        rows={state.escalations}
+        selectedId={selectedId}
+      />
+      <EscalationPreview
+        escalation={selected}
+        onApprove={async (id) => state.setStatus(id, 'approved')}
+        onCorrect={async (id) => state.setStatus(id, 'corrected')}
+        onOpenInvestigation={(id) => navigate(`/investigations/${id}`)}
+        onReject={async (id) => state.setStatus(id, 'rejected')}
+      />
+    </div>
+  )
+}
+
+function HealthPage({ state }: { state: AppState }) {
+  return (
+    <div className="flex flex-col gap-4">
+      <HealthScoreCard
+        components={demoHealthComponents}
+        overallScore={state.overallHealth}
+        trend="up"
+      />
+      <section
+        aria-label="Health component breakdown"
+        className="rounded-xl border border-border bg-surface-1 p-4"
+      >
+        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-text-secondary">
+          Component scores
+        </h2>
+        <HealthMetricBreakdown components={demoHealthComponents} />
+      </section>
+      <HealthTrendChart data={demoHealthTrend} />
+    </div>
+  )
+}
+
+/**
+ * Investigation routes are Stream C's surface. Placeholders here keep the
+ * navigation honest -- an empty state that says what is missing beats a dead
+ * link or a fabricated screen.
+ */
+function InvestigationsPage() {
+  return (
+    <EmptyState
+      description="The investigation list and trace are Stream C's components. They render here once wired to the API."
+      title="Investigations"
+    />
+  )
+}
+
+export function App() {
+  const state = useAppState()
+
+  return (
+    <BrowserRouter>
+      <AppShell
+        toolbar={
+          <>
+            <RepositorySelector
+              isIndexing={state.isIndexing}
+              onIndexRequested={async () => {
+                state.setIsIndexing(true)
+                // Placeholder until POST /api/repos/{owner}/{repo}/index exists.
+                await new Promise((resolve) => setTimeout(resolve, 1200))
+                state.setIsIndexing(false)
+              }}
+              onSelect={state.setSelectedRepo}
+              repos={demoRepos}
+              selectedRepo={state.selectedRepo}
+            />
+            <AgentStatusIndicator
+              className="ml-auto"
+              connectionState="offline"
+              githubConnected
+              lastSyncAt={state.selectedRepo.last_scan}
+            />
+          </>
+        }
+      >
+        <Routes>
+          <Route element={<Navigate replace to="/overview" />} path="/" />
+          <Route element={<OverviewPage state={state} />} path="/overview" />
+          <Route
+            element={<EscalationsPage state={state} />}
+            path="/escalations"
+          />
+          <Route element={<InvestigationsPage />} path="/investigations" />
+          <Route element={<InvestigationsPage />} path="/investigations/:id" />
+          <Route element={<HealthPage state={state} />} path="/health" />
+        </Routes>
+      </AppShell>
+    </BrowserRouter>
+  )
+}

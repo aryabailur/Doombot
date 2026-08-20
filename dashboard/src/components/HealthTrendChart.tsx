@@ -128,7 +128,7 @@ export function HealthTrendChart({ data, className }: HealthTrendChartProps) {
                 color: 'var(--text-primary)',
                 fontSize: 12,
               }}
-              labelFormatter={shortDate}
+              labelFormatter={(label) => shortDate(String(label))}
             />
             <Line
               dataKey="score"
