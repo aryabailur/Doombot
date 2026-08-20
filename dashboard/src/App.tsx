@@ -423,6 +423,9 @@ export function App() {
 
   const repos = useApiData(() => getRepos(), {})
 
+  /** What the API knows, plus anything added this session, plus the selection. */
+  const selectableRepos = mergeRepos(repos.data, addedRepos, repoName)
+
   // One socket for the shell, purely to drive the connection indicator. The
   // detail page opens its own for step events -- the hub broadcasts to every
   // client, so a second connection costs nothing and keeps the pages
@@ -473,22 +476,43 @@ export function App() {
                 }
               }}
               onAddRepository={async (name) => {
-                // Indexing is what actually registers a repository: the
-                // backend derives /api/repos from history plus the monitor
-                // list, so there is no separate registration call to make.
-                // A failure propagates so the selector can show it inline --
-                // a bad name or a private repo must not look like success.
                 const [nextOwner, nextRepo] = splitRepo(name)
-                await indexRepo(nextOwner, nextRepo)
+
+                // Scan first, and let it throw. It is the only step that
+                // reads the repository synchronously, so it is the only one
+                // that can tell a real public repo from a typo: indexing is
+                // fire-and-forget (202-style, work happens in a thread), so
+                // awaiting it succeeds even for a repository that does not
+                // exist. Adding a bad name must not look like success.
+                const result = await scanRepository(nextOwner, nextRepo)
+
+                // Indexing feeds duplicate detection and the issue graph.
+                // Deliberately not awaited: embedding a large backlog takes
+                // far longer than a click should block for, and the scan
+                // above already established the repo is real.
+                void indexRepo(nextOwner, nextRepo)
+
                 setAddedRepos((current) =>
                   current.includes(name) ? current : [...current, name],
                 )
                 setRepoName(name)
+                setScanNote(
+                  result.queued.length > 0
+                    ? `Added ${name} — investigating ${result.queued.length} issue${result.queued.length === 1 ? '' : 's'}.`
+                    : `Added ${name} — no open issues to investigate.`,
+                )
                 repos.reload()
               }}
               onSelect={(next) => setRepoName(next.repo_name)}
-              repos={mergeRepos(repos.data, addedRepos, repoName)}
-              selectedRepo={repos.data?.find(
+              repos={selectableRepos}
+              // Resolved against the merged list, not repos.data. A freshly
+              // added repository is not in the API response yet -- indexing
+              // creates no investigation record, so /api/repos cannot know
+              // about it -- and looking it up there returned undefined, which
+              // hid both the Index and Analyse buttons. The repo appeared in
+              // the dropdown while being impossible to act on: exactly the
+              // "Analyse just disappeared" symptom.
+              selectedRepo={selectableRepos.find(
                 (item) => item.repo_name === repoName,
               )}
             />
