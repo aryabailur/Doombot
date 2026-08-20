@@ -43,9 +43,13 @@ const ForceGraph3D = lazy(() => import('react-force-graph-3d'))
  * single boundary where it exists.
  */
 type SimNode = GraphNode & { x?: number; y?: number }
+type D3Force = {
+  strength?: (v: number | ((node: SimNode) => number)) => void
+  distance?: (v: number) => void
+}
 type GraphHandle = {
   zoomToFit: (ms: number, px: number) => void
-  d3Force: (name: string) => { strength?: (v: number) => void; distance?: (v: number) => void } | undefined
+  d3Force: (name: string) => D3Force | undefined
 }
 
 export type GraphCategory = IssueGraphCategory
@@ -224,6 +228,16 @@ function IssueRelationshipGraph({
   const [hidden, setHidden] = useState<Set<GraphCategory>>(new Set())
   const [selectedLink, setSelectedLink] = useState<GraphLink | null>(null)
 
+  /** Ids with at least one edge, so the layout can treat orphans differently. */
+  const connectedIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const link of links) {
+      ids.add(link.source)
+      ids.add(link.target)
+    }
+    return ids
+  }, [links])
+
   // Force strengths, applied once the lazy component has mounted.
   //
   // The library's defaults are calibrated for hundreds of nodes; at eight they
@@ -235,9 +249,23 @@ function IssueRelationshipGraph({
     if (!handle?.d3Force) {
       return
     }
-    handle.d3Force('charge')?.strength?.(-260)
+
+    // Unconnected nodes get no link force, so plain charge repulsion throws
+    // them to the far corners of the canvas. zoomToFit then has to frame
+    // those outliers, which shrinks the actual cluster to a few pixels in a
+    // corner -- one orphan issue was enough to make the whole graph
+    // unreadable, which is the single biggest reason it looked arbitrary.
+    //
+    // Repulsion is therefore scaled down for nodes with no edges, and a weak
+    // centering force holds them in a loose "no relationships yet" group near
+    // the middle. Connected clusters keep the strong repulsion that separates
+    // them; the orphans stop dictating the viewport.
+    handle.d3Force('charge')?.strength?.((node: SimNode) =>
+      connectedIds.has(node.id) ? -260 : -40,
+    )
     handle.d3Force('link')?.distance?.(70)
-  })
+    handle.d3Force('center')?.strength?.(0.06)
+  }, [connectedIds])
 
   const data = useMemo(() => {
     const visibleNodes = nodes.filter((node) => !hidden.has(node.category))
@@ -251,6 +279,16 @@ function IssueRelationshipGraph({
         .map((link) => ({ ...link })),
     }
   }, [hidden, links, nodes])
+
+  /** Visible nodes with no visible edge -- surfaced in the header. */
+  const unconnectedCount = useMemo(() => {
+    const linked = new Set<string>()
+    for (const link of data.links) {
+      linked.add(link.source)
+      linked.add(link.target)
+    }
+    return data.nodes.filter((node) => !linked.has(node.id)).length
+  }, [data])
 
   const toggle = (category: GraphCategory) => {
     setHidden((current) => {
@@ -271,7 +309,12 @@ function IssueRelationshipGraph({
       const y = node.y ?? 0
       // Engagement drives size, square-rooted so one very busy issue does not
       // dwarf everything else off the canvas.
-      const radius = 4 + Math.sqrt(Math.min(node.engagement, 100)) * 0.9
+      // Floor of 7px, not 4. Engagement is legitimately 0 on most issues in
+      // a young repository, and at radius 4 those nodes were sub-pixel specks
+      // that were neither readable nor comfortably clickable. The sqrt term
+      // still differentiates high-engagement issues; it just no longer
+      // decides whether a node is visible at all.
+      const radius = 7 + Math.sqrt(Math.min(node.engagement, 100)) * 1.6
       const colour = token(categoryToken[node.category])
 
       if (node.escalated) {
@@ -330,6 +373,16 @@ function IssueRelationshipGraph({
         </h2>
         <span className="text-xs text-text-muted">
           {data.nodes.length} issues · {data.links.length} connections
+          {unconnectedCount > 0 ? (
+            // Naming this explicitly matters: an isolated dot otherwise reads
+            // as a rendering glitch rather than the real finding, which is
+            // that the issue has no duplicate, reference, or shared-label
+            // relationship to anything else in the repository.
+            <span title="No duplicate, reference, or shared-label relationship to any other issue">
+              {' '}
+              · {unconnectedCount} unconnected
+            </span>
+          ) : null}
         </span>
         <Button
           className="ml-auto h-7 px-2 text-xs"
