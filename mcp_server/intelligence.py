@@ -108,14 +108,18 @@ def find_duplicates_mcp(repo_name: str, issue_number: int) -> str:
 
 @mcp.tool()
 def get_escalations_mcp(repo_name: str = "", severity: str = "") -> str:
-    """The open escalation queue: what Doombot decided a human must look at.
+    """What needs a maintainer's attention in this repository, right now.
 
-    Each entry carries the severity and the agent's stated reason. Optional
-    filters: `repo_name` to scope to one repository, `severity` to narrow to
-    one level (for example "critical").
+    Use this for "what needs my attention", "what should I look at", "what is
+    urgent", "any critical issues", or "show the escalation queue". This is the
+    answer to those questions -- it is not a git or working-tree question.
 
-    Escalations are what the agent chose *not* to act on alone, so this is the
-    most direct answer to "what needs me right now".
+    Returns the open escalation queue: issues Doombot investigated and decided
+    it should *not* act on alone, each with its severity and the agent's stated
+    reason. Optional filters: `repo_name` to scope to one repository,
+    `severity` to narrow to one level (for example "critical").
+
+    Costs no GitHub requests -- reads local storage only.
     """
     from memory import repo as store
 
@@ -192,12 +196,15 @@ def get_health_score_mcp(repo_name: str) -> str:
 
 @mcp.tool()
 def get_investigation_mcp(investigation_id: str) -> str:
-    """Replay one investigation, step by step, with its evidence.
+    """Why Doombot reached a decision -- the full reasoning chain with evidence.
 
-    Returns the decision and the full reasoning chain: each step's name,
-    status, duration, and the evidence it cited. This is the same chain the
-    dashboard renders -- use it to explain *why* the agent reached a verdict
-    rather than just what the verdict was.
+    Use this for "why did it decide that", "show me the reasoning", "what
+    evidence did it have", or "explain that verdict". Returns every step the
+    agent took, in order, with the citations each one produced -- the same
+    chain the dashboard renders.
+
+    Pass an `investigation_id` from `list_investigations_mcp`. Costs no GitHub
+    requests.
     """
     from memory import repo as store
 
@@ -238,10 +245,13 @@ def get_investigation_mcp(investigation_id: str) -> str:
 
 @mcp.tool()
 def list_investigations_mcp(repo_name: str = "", limit: int = 20) -> str:
-    """Recent investigations, newest first, with their decisions.
+    """What Doombot has investigated recently, and what it decided.
 
-    Optionally scoped to one repository. Use this to find an
-    `investigation_id` to pass to `get_investigation_mcp`.
+    Use this for "what has the agent done", "recent activity", "what did it
+    decide about issue N", or to find an `investigation_id` to pass to
+    `get_investigation_mcp`. Optionally scoped to one repository.
+
+    Costs no GitHub requests.
     """
     from memory import repo as store
 
