@@ -986,6 +986,12 @@ def build_code_graph(
     clusters = sorted({unit["cluster_label"] for unit in units})
     return {
         "repository": repo_name,
+        # Every source file that was read and parsed, including files that
+        # produced no symbols. The explorer's file tree is built from this:
+        # deriving it from node paths alone would silently drop any file whose
+        # contents parsed to nothing, which is exactly the file a reader is
+        # most likely to go looking for.
+        "files": sorted(supported),
         "nodes": units,
         "links": links,
         "stats": {

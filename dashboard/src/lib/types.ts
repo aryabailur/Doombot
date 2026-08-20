@@ -257,4 +257,22 @@ export interface CodeGraphResponse {
   links: CodeGraphLink[];
   stats: CodeGraphStats;
   impact: CodeGraphImpact;
+  /**
+   * Every source file the build read, including files that parsed to zero
+   * symbols. The explorer's file tree is built from this rather than from node
+   * paths: on this repository 24 of 60 indexed files produce no symbols, so a
+   * tree derived from nodes alone would hide 40% of what was read.
+   *
+   * Additive and defaulted server-side, so an older payload still validates.
+   */
+  files: string[];
+}
+
+/** One repository file, read on demand for the explorer's code pane. */
+export interface SourceFile {
+  path: string;
+  content: string;
+  lines: number;
+  language: string;
+  truncated: boolean;
 }

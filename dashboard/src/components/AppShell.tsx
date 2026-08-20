@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
 import {
   Activity,
+  Boxes,
   BrainCircuit,
   PanelLeftClose,
   PanelLeftOpen,
@@ -30,6 +31,7 @@ const navItems: NavItem[] = [
   { to: '/escalations', label: 'Escalations', icon: TriangleAlert },
   { to: '/investigations', label: 'Investigations', icon: Search },
   { to: '/graph', label: 'Graph', icon: Network },
+  { to: '/explorer', label: 'Explorer', icon: Boxes },
   { to: '/health', label: 'Health', icon: Activity },
 ]
 

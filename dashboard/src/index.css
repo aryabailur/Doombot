@@ -53,3 +53,44 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/*
+ * Helpers used by the graph explorer (src/components/explorer/).
+ *
+ * The explorer carries its own palette in `theme.ts` because it is a canvas
+ * surface with a runtime light/dark toggle, so it cannot read the tokens above.
+ * These two are the exception: a scrollbar and an entrance animation are
+ * document-level concerns that a component cannot express inline.
+ */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 0.35rem;
+  height: 0.35rem;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.35);
+  border-radius: 100px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(168, 85, 247, 0.5);
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-rise-in {
+  animation: rise-in 0.22s ease-out;
+}

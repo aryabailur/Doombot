@@ -8,6 +8,7 @@ import type {
   CodeGraphNode,
   CodeGraphResponse,
   IssueGraphResponse,
+  SourceFile,
 } from "./types";
 
 export const mockRepos: RepoSummary[] = [
@@ -240,6 +241,23 @@ function codeNode(
 
 export const mockCodeGraph: CodeGraphResponse = {
   repository: "aryabailur/Doombot",
+  // Deliberately lists two files the nodes below never mention
+  // (agents/__init__.py, rag/embedder.py): the explorer's tree is built from
+  // this list, and offline mode should exercise the zero-symbol case rather
+  // than only the happy path.
+  files: [
+    "agents/__init__.py",
+    "agents/triage/duplicate_detector.py",
+    "agents/triage/impact_scorer.py",
+    "agents/triage/security_scanner.py",
+    "agents/triage_graph.py",
+    "api/routes_repos.py",
+    "api/schemas.py",
+    "dashboard/src/components/IssueGraph.tsx",
+    "dashboard/src/lib/api.ts",
+    "rag/embedder.py",
+    "rag/graph.py",
+  ],
   nodes: [
     codeNode("code-triage", "issue_app", "agents/triage_graph.py", "graph", "agents", -10, 1, 0),
     codeNode("code-duplicate", "duplicate_detector_node", "agents/triage/duplicate_detector.py", "graph_node", "agents/triage", -7, 4, 2),
@@ -288,3 +306,38 @@ export const mockCodeGraph: CodeGraphResponse = {
     suggested_labels: ["high-impact", "rag", "api", "cross-subsystem"],
   },
 };
+
+/**
+ * Offline stand-in for one source file.
+ *
+ * Synthesised rather than a real snapshot: the point of mock mode is that the
+ * code pane renders, scrolls, and highlights a line without a network or a
+ * GitHub token, which a short generated file exercises as well as a long real
+ * one would.
+ */
+export function mockSourceFile(path: string): SourceFile {
+  const content = [
+    `"""${path} -- offline mock source."""`,
+    "",
+    "def build_code_graph(repo_name, changed_paths=None, *, files=None):",
+    '    """Parse repository source into symbols and dependencies."""',
+    "    source_files = files if files is not None else _fetch_code_files(repo_name)",
+    "    units = []",
+    "    for file_path, source in sorted(source_files.items()):",
+    "        units.extend(_parse_python(file_path, source))",
+    "    return {",
+    '        "repository": repo_name,',
+    '        "files": sorted(source_files),',
+    '        "nodes": units,',
+    "    }",
+    "",
+  ].join("\n");
+
+  return {
+    path,
+    content,
+    lines: content.split("\n").length,
+    language: path.endsWith(".py") ? "python" : "text",
+    truncated: false,
+  };
+}
