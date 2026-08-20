@@ -20,6 +20,7 @@ import { EscalationPreview } from '@/components/EscalationPreview'
 import { HealthMetricBreakdown } from '@/components/HealthMetricBreakdown'
 import { HealthScoreCard } from '@/components/HealthScoreCard'
 import { HealthTrendChart } from '@/components/HealthTrendChart'
+import { IssueGraph } from '@/components/IssueGraph'
 import {
   RepositorySelector,
   type RepoSummary,
@@ -28,6 +29,8 @@ import {
   demoActivity,
   demoEscalations,
   demoHealthComponents,
+  demoGraphLinks,
+  demoGraphNodes,
   demoHealthTrend,
   demoRepos,
 } from '@/demo/demoData'
@@ -168,6 +171,18 @@ function HealthPage({ state }: { state: AppState }) {
   )
 }
 
+
+function GraphPage() {
+  const navigate = useNavigate()
+  return (
+    <IssueGraph
+      links={demoGraphLinks}
+      nodes={demoGraphNodes}
+      onSelectIssue={(node) => navigate(`/investigations/issue-${node.number}`)}
+    />
+  )
+}
+
 /**
  * Investigation routes are Stream C's surface. Placeholders here keep the
  * navigation honest -- an empty state that says what is missing beats a dead
@@ -220,6 +235,7 @@ export function App() {
           />
           <Route element={<InvestigationsPage />} path="/investigations" />
           <Route element={<InvestigationsPage />} path="/investigations/:id" />
+          <Route element={<GraphPage />} path="/graph" />
           <Route element={<HealthPage state={state} />} path="/health" />
         </Routes>
       </AppShell>

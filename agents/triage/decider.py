@@ -149,6 +149,20 @@ def _decide(state: GraphState) -> dict:
             "confidence": 0.9,
         }
 
+    # A grounded fix from the repo's own history outranks closing as a
+    # duplicate: telling the author how to solve it is strictly more useful
+    # than pointing at another open thread. Still ranked below security.
+    resolution = state.get("resolution")
+    if resolution and resolution.get("reply"):
+        return {
+            "action": "resolve",
+            "reason": (
+                f"A known fix from #{resolution['source_issue']} appears to apply "
+                f"(similarity {resolution['similarity']:.2f})."
+            ),
+            "confidence": float(resolution.get("confidence", 0.0)),
+        }
+
     if confirmed_dupes:
         best = max(confirmed_dupes, key=lambda d: d["score"])
         return {
@@ -208,6 +222,17 @@ def _compose_comment(decision: dict, state: GraphState) -> str:
             f"{refs}\n\nThis is context only, not a duplicate determination."
         )
 
+    if action == "resolve":
+        resolution = state.get("resolution") or {}
+        # The drafted reply is the comment. It already cites its source issue
+        # and was self-checked for addressing THIS issue; wrapping it in extra
+        # boilerplate would only dilute it.
+        note = (
+            f"_Suggested by Doombot from #{resolution.get('source_issue')}. "
+            "If this does not help, say so and it will be escalated._"
+        )
+        return f"{resolution.get('reply', '')}\n\n{note}"
+
     if action == "escalate":
         # NEVER interpolate decision["reason"] here. For a security escalation
         # that string names the matched keywords ("api key", "auth bypass"),
@@ -242,6 +267,21 @@ def decider_node(state: GraphState) -> tuple[dict, list[dict]]:
     """
     decision = _decide(state)
     comment = _compose_comment(decision, state)
+
+    # F16 safety gate. A drafted resolution is posted only when the resolver
+    # marked it auto_post, which requires DOOMBOT_AUTO_RESOLVE=1 *and* a
+    # confidence above its threshold. Otherwise the draft is recorded and a
+    # maintainer approves it from the dashboard.
+    #
+    # The gate lives here rather than in the resolver because decider is the
+    # only node permitted GitHub side effects -- keeping the decision to write
+    # and the write itself in one place is what makes this auditable.
+    resolution = state.get("resolution")
+    held_for_approval = False
+    if decision["action"] == "resolve" and not (resolution or {}).get("auto_post"):
+        comment = ""
+        held_for_approval = True
+
     if comment:
         comment = comment + "\n\n" + COMMENT_MARKER
 
@@ -257,6 +297,15 @@ def decider_node(state: GraphState) -> tuple[dict, list[dict]]:
             "snippet": decision["reason"],
         }
     ]
+
+    if held_for_approval:
+        evidence.append({
+            "type": "rule", "ref": "resolution_held", "score": None,
+            "snippet": (
+                "resolution drafted but not posted -- approve it from the "
+                "dashboard, or set DOOMBOT_AUTO_RESOLVE=1 to allow auto-posting"
+            ),
+        })
 
     if not _writes_enabled():
         evidence.append({

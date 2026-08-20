@@ -1,6 +1,7 @@
 import type { ActivityItem } from '@/components/AgentActivityFeed'
 import type { EscalationRow } from '@/components/EscalationTable'
 import type { HealthComponentScore } from '@/components/HealthMetricBreakdown'
+import type { GraphLink, GraphNode } from '@/components/IssueGraph'
 import type { HealthTrendPoint } from '@/components/HealthTrendChart'
 import type { RepoSummary } from '@/components/RepositorySelector'
 
@@ -157,4 +158,35 @@ export const demoActivity: ActivityItem[] = [
     timestamp: minutesAgo(96),
     kind: 'investigation',
   },
+]
+
+/**
+ * Graph fixtures (F15).
+ *
+ * Shaped exactly like rag.graph.build_graph's output, so swapping to
+ * GET /api/repos/{owner}/{repo}/graph is a data-source change only.
+ *
+ * Deliberately shows three clusters plus one isolate, which is the pattern
+ * the graph exists to make visible: a recurring auth regression, a theme
+ * cluster, a duplicate chain, and one escalated security issue off on its own.
+ */
+export const demoGraphNodes: GraphNode[] = [
+  { id: 'issue-4', number: 4, title: 'API_KEY exposed in traceback', category: 'security', state: 'open', labels: ['security', 'bug'], engagement: 60, escalated: true },
+  { id: 'issue-3', number: 3, title: 'Login fails with 401 after upgrading to v2.1', category: 'open', state: 'open', labels: ['bug', 'auth'], engagement: 17, escalated: false },
+  { id: 'issue-6', number: 6, title: 'Login broken with 401 after v2.1 upgrade', category: 'duplicate', state: 'open', labels: ['bug', 'auth'], engagement: 5, escalated: false },
+  { id: 'issue-247', number: 247, title: 'Auth middleware rejects valid tokens', category: 'resolved', state: 'closed', labels: ['bug', 'auth'], engagement: 31, escalated: false },
+  { id: 'issue-5', number: 5, title: 'Dark mode toggle does nothing', category: 'open', state: 'open', labels: ['ui'], engagement: 2, escalated: false },
+  { id: 'issue-88', number: 88, title: 'Theme switch unresponsive in settings', category: 'duplicate', state: 'open', labels: ['ui'], engagement: 4, escalated: false },
+  { id: 'issue-91', number: 91, title: 'Settings panel ignores theme preference', category: 'open', state: 'open', labels: ['ui'], engagement: 1, escalated: false },
+  { id: 'issue-120', number: 120, title: 'Add pagination to the search endpoint', category: 'stale', state: 'open', labels: ['feature'], engagement: 9, escalated: false },
+]
+
+export const demoGraphLinks: GraphLink[] = [
+  { source: 'issue-3', target: 'issue-6', kind: 'duplicate', score: 1.0, why: '1.00 cosine similarity' },
+  { source: 'issue-3', target: 'issue-4', kind: 'similar', score: 0.81, why: '0.81 cosine similarity' },
+  { source: 'issue-3', target: 'issue-247', kind: 'reference', score: 1.0, why: '#3 references #247, and 0.79 cosine similarity' },
+  { source: 'issue-6', target: 'issue-247', kind: 'similar', score: 0.74, why: '0.74 cosine similarity' },
+  { source: 'issue-5', target: 'issue-88', kind: 'duplicate', score: 0.93, why: '0.93 cosine similarity' },
+  { source: 'issue-88', target: 'issue-91', kind: 'similar', score: 0.78, why: '0.78 cosine similarity' },
+  { source: 'issue-5', target: 'issue-91', kind: 'metadata', score: 0.5, why: 'shared label: ui' },
 ]

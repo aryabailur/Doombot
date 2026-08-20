@@ -42,6 +42,12 @@ export function activate(context: vscode.ExtensionContext): void {
       'doombot.openDashboard',
       (route?: string) => openDashboard(context, route),
     ),
+    // F15. Deliberately routes to the dashboard rather than rendering a
+    // native graph: react-force-graph needs a canvas, and DESIGN.md 4 treats
+    // reimplementing dashboard UI natively as a spec conflict.
+    vscode.commands.registerCommand('doombot.openIssueGraph', () =>
+      openDashboard(context, '/graph'),
+    ),
     vscode.commands.registerCommand('doombot.triggerScan', triggerScan),
     vscode.commands.registerCommand('doombot.refreshEscalations', () =>
       refreshAll(),

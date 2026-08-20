@@ -47,7 +47,9 @@ merged to `main` and demonstrated end to end.
 | Weekly brief | F11 | P2 | Stretch |
 | MCP protocol server | F12 | P2 | Partial — 4 tools registered |
 | Web dashboard | F13 | P0 | Planned |
-| VS Code extension | F14 | P2 | Stretch |
+| VS Code extension | F14 | P2 | Implemented |
+| Issue relationship graph | F15 | Stretch | Implemented — fixtures |
+| Intelligent issue resolution | F16 | Stretch | Implemented — approval-gated |
 
 **Working today:** the PR-review LangGraph pipeline
 (`fetcher → reviewer → test_writer → summarizer`), a FastMCP stdio server over
@@ -69,6 +71,7 @@ Read in this order. **Agents: `CLAUDE.md` first, always.**
 | [docs/WORKFLOW.md](docs/WORKFLOW.md) | Git, PRs, integration gates |
 | [docs/FEATURES.md](docs/FEATURES.md) | Feature → owner → branch mapping, cut list |
 | [docs/PLAN.md](docs/PLAN.md) | Hour-boxed schedule and demo script |
+| [STRETCH_FEATURES.md](STRETCH_FEATURES.md) | F15 and F16 specifications |
 | [TECHSTACK.md](TECHSTACK.md) | Dependencies, env vars, install |
 
 Per-folder contracts: [agents/](agents/CLAUDE.md) · [rag/](rag/CLAUDE.md) ·
