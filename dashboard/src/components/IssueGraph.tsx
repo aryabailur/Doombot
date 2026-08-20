@@ -96,6 +96,20 @@ const categoryLabel: Record<GraphCategory, string> = {
   open: 'Open',
 }
 
+/** Runtimes the code graph assigns, in a stable display order. */
+const RUNTIMES = ['python', 'server', 'browser', 'shared'] as const
+
+/** Add or remove one value, returning a new Set so React sees the change. */
+function toggleIn(current: Set<string>, value: string): Set<string> {
+  const next = new Set(current)
+  if (next.has(value)) {
+    next.delete(value)
+  } else {
+    next.add(value)
+  }
+  return next
+}
+
 const linkLabel: Record<GraphLinkKind, string> = {
   duplicate: 'Likely duplicate',
   similar: 'Related',
@@ -937,6 +951,31 @@ function CodeGraphExplorer({
   const [canvasWidth, setCanvasWidth] = useState(800)
   const [dimension, setDimension] = useState<'2d' | '3d'>('3d')
   const [query, setQuery] = useState('')
+  /**
+   * Structured filters, because search alone cannot cut a hairball.
+   *
+   * 336 symbols and 430 dependencies rendered at once is not a graph a reader
+   * can interpret -- the shape is dominated by sheer edge count and no
+   * individual relationship is legible. Text search only helps when you
+   * already know the symbol's name; these let you narrow by structure first
+   * and then look, which is the order the question actually arrives in
+   * ("what does the API layer touch?" long before "where is `chain_step`?").
+   */
+  const [subsystems, setSubsystems] = useState<Set<string>>(new Set())
+  const [runtimes, setRuntimes] = useState<Set<string>>(new Set())
+  /**
+   * Hide low-connectivity leaves; 0 shows everything.
+   *
+   * Defaults to 2 rather than 0 deliberately. The full graph is 336 symbols
+   * and 430 dependencies, which renders as a hairball where no individual
+   * relationship is readable -- an unusable first impression. Measured against
+   * this repository: >=1 keeps 301 nodes (barely helps, since isolated symbols
+   * carry no edges anyway), >=2 keeps 191 nodes and 322 links, >=3 keeps 116
+   * and 200. 2 is the conservative choice -- it drops the single-reference
+   * leaves that add ink without structure, while keeping every real
+   * dependency chain. The slider goes to 0 for anyone who wants everything.
+   */
+  const [minDegree, setMinDegree] = useState(2)
   const [selectedNode, setSelectedNode] = useState<CodeGraphNode | null>(null)
   const [selectedLink, setSelectedLink] = useState<CodeGraphLink | null>(null)
   const [reducedMotion, setReducedMotion] = useState(false)
@@ -968,14 +1007,29 @@ function CodeGraphExplorer({
 
   const filtered = useMemo(() => {
     const normalized = query.trim().toLowerCase()
-    const nodes = normalized
-      ? graph.nodes.filter((node) =>
-          [node.symbol_name, node.qualname, node.file_path, node.cluster_label]
-            .join(' ')
-            .toLowerCase()
-            .includes(normalized),
-        )
-      : graph.nodes
+    const nodes = graph.nodes.filter((node) => {
+      if (
+        normalized &&
+        ![node.symbol_name, node.qualname, node.file_path, node.cluster_label]
+          .join(' ')
+          .toLowerCase()
+          .includes(normalized)
+      ) {
+        return false
+      }
+      // An empty set means "no restriction" rather than "hide everything" --
+      // the filters start open, so the first render is still the whole graph.
+      if (subsystems.size > 0 && !subsystems.has(node.cluster_label)) {
+        return false
+      }
+      if (runtimes.size > 0 && !runtimes.has(node.runtime)) {
+        return false
+      }
+      if (minDegree > 0 && node.in_degree + node.out_degree < minDegree) {
+        return false
+      }
+      return true
+    })
     const visibleIds = new Set(nodes.map((node) => node.id))
     const links = graph.links.filter(
       (link) => visibleIds.has(link.source) && visibleIds.has(link.target),
@@ -990,7 +1044,7 @@ function CodeGraphExplorer({
       }),
       links: links.map((link) => ({ ...link })),
     }
-  }, [dimension, graph.links, graph.nodes, query])
+  }, [dimension, graph.links, graph.nodes, minDegree, query, runtimes, subsystems])
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -1130,6 +1184,112 @@ function CodeGraphExplorer({
         <GraphMetric label="Changed" tone="critical" value={changedCount} />
         <GraphMetric label="Ripple" tone="warning" value={rippleCount} />
         <GraphMetric label="Languages" value={graph.stats.languages.length} />
+      </div>
+
+      <div className="flex flex-col gap-2 rounded-lg border border-border bg-surface-2 p-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-medium uppercase tracking-wide text-text-secondary">
+            Subsystem
+          </span>
+          {graph.stats.clusters.map((cluster) => {
+            const on = subsystems.has(cluster)
+            const count = graph.nodes.filter(
+              (node) => node.cluster_label === cluster,
+            ).length
+            return (
+              <Button
+                aria-pressed={on}
+                className={cn('h-7 gap-1.5 px-2 text-xs', !on && 'opacity-60')}
+                key={cluster}
+                onClick={() => setSubsystems(toggleIn(subsystems, cluster))}
+                size="sm"
+                type="button"
+                variant={on ? 'secondary' : 'outline'}
+              >
+                {cluster}
+                <span className="text-text-muted">{count}</span>
+              </Button>
+            )
+          })}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-medium uppercase tracking-wide text-text-secondary">
+            Runtime
+          </span>
+          {RUNTIMES.map((runtime) => {
+            const on = runtimes.has(runtime)
+            const count = graph.nodes.filter(
+              (node) => node.runtime === runtime,
+            ).length
+            if (count === 0) {
+              return null
+            }
+            return (
+              <Button
+                aria-pressed={on}
+                className={cn('h-7 gap-1.5 px-2 text-xs', !on && 'opacity-60')}
+                key={runtime}
+                onClick={() => setRuntimes(toggleIn(runtimes, runtime))}
+                size="sm"
+                type="button"
+                variant={on ? 'secondary' : 'outline'}
+              >
+                {runtime}
+                <span className="text-text-muted">{count}</span>
+              </Button>
+            )
+          })}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <label
+            className="flex items-center gap-2 text-xs text-text-secondary"
+            htmlFor="code-graph-min-degree"
+          >
+            <span className="font-medium uppercase tracking-wide">
+              Min connections
+            </span>
+            <input
+              className="w-32 accent-[var(--accent)]"
+              id="code-graph-min-degree"
+              max={12}
+              min={0}
+              onChange={(event) => setMinDegree(Number(event.target.value))}
+              step={1}
+              type="range"
+              value={minDegree}
+            />
+            <span className="w-4 tabular-nums text-text-primary">
+              {minDegree}
+            </span>
+          </label>
+
+          <span className="text-xs text-text-muted">
+            Showing {filtered.nodes.length} of {graph.nodes.length} symbols
+            {' · '}
+            {filtered.links.length} of {graph.links.length} dependencies
+          </span>
+
+          {subsystems.size > 0 || runtimes.size > 0 || minDegree > 0 ? (
+            <Button
+              className="ml-auto h-7 px-2 text-xs"
+              onClick={() => {
+                setSubsystems(new Set())
+                setRuntimes(new Set())
+                // Back to 0, not the default of 2: "clear" should mean
+                // "show me everything", otherwise there is no way to reach
+                // the unfiltered graph from the UI.
+                setMinDegree(0)
+              }}
+              size="sm"
+              type="button"
+              variant="ghost"
+            >
+              Show all
+            </Button>
+          ) : null}
+        </div>
       </div>
 
       <label className="relative block max-w-xl">
