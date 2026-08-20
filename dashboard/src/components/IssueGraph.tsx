@@ -1,4 +1,12 @@
-import { Suspense, lazy, useCallback, useMemo, useRef, useState } from 'react'
+import {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { Network } from 'lucide-react'
 
 import { EmptyState } from '@/components/EmptyState'
@@ -25,7 +33,10 @@ const ForceGraph2D = lazy(() => import('react-force-graph-2d'))
  * single boundary where it exists.
  */
 type SimNode = GraphNode & { x?: number; y?: number }
-type GraphHandle = { zoomToFit: (ms: number, px: number) => void }
+type GraphHandle = {
+  zoomToFit: (ms: number, px: number) => void
+  d3Force: (name: string) => { strength?: (v: number) => void; distance?: (v: number) => void } | undefined
+}
 
 export type GraphCategory =
   | 'security'
@@ -143,6 +154,21 @@ export function IssueGraph({
   const [hidden, setHidden] = useState<Set<GraphCategory>>(new Set())
   const [selectedLink, setSelectedLink] = useState<GraphLink | null>(null)
 
+  // Force strengths, applied once the lazy component has mounted.
+  //
+  // The library's defaults are calibrated for hundreds of nodes; at eight they
+  // collapse every cluster into a single knot, which hides the structure the
+  // graph exists to show. Stronger repulsion and a longer link distance give
+  // each cluster room to separate visibly.
+  useEffect(() => {
+    const handle = graphRef.current
+    if (!handle?.d3Force) {
+      return
+    }
+    handle.d3Force('charge')?.strength?.(-260)
+    handle.d3Force('link')?.distance?.(70)
+  })
+
   const data = useMemo(() => {
     const visibleNodes = nodes.filter((node) => !hidden.has(node.category))
     const ids = new Set(visibleNodes.map((node) => node.id))
@@ -191,14 +217,20 @@ export function IssueGraph({
       ctx.fillStyle = colour
       ctx.fill()
 
-      // The number is always drawn, so the graph is readable without colour.
-      if (scale > 1.1) {
-        ctx.font = `${11 / scale}px sans-serif`
-        ctx.textAlign = 'center'
-        ctx.textBaseline = 'top'
-        ctx.fillStyle = token('--text-secondary')
-        ctx.fillText(`#${node.number}`, x, y + radius + 1)
-      }
+      // The number is drawn at every zoom level. It was previously gated
+      // behind `scale > 1.1`, which meant the default view rendered as bare
+      // coloured dots -- exactly the "colour is the only signal" failure this
+      // component's own contract forbids (dashboard/CLAUDE.md 8).
+      //
+      // Font size is clamped rather than scaled linearly: dividing by `scale`
+      // alone makes the text illegibly small when zoomed out and absurdly
+      // large when zoomed in.
+      const fontSize = Math.min(14, Math.max(9, 11 / scale))
+      ctx.font = `${fontSize}px ui-sans-serif, system-ui, sans-serif`
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'top'
+      ctx.fillStyle = token('--text-secondary')
+      ctx.fillText(`#${node.number}`, x, y + radius + 2 / scale)
     },
     [],
   )
@@ -272,6 +304,11 @@ export function IssueGraph({
         <Suspense fallback={<SkeletonState className="p-4" variant="card" />}>
         <ForceGraph2D
           backgroundColor="transparent"
+          // Repulsion and link distance are tuned up from the defaults, which
+          // are calibrated for hundreds of nodes. At this scale the defaults
+          // collapse every cluster into a knot, hiding the structure the graph
+          // exists to show.
+          d3AlphaDecay={0.02}
           graphData={data}
           height={420}
           linkColor={(link) =>
@@ -296,6 +333,13 @@ export function IssueGraph({
           nodeLabel={(node) =>
             `#${(node as GraphNode).number} — ${(node as GraphNode).title}`
           }
+          // Frame the graph once the simulation settles. Without this the
+          // default camera leaves everything clustered in a corner of a mostly
+          // empty canvas -- the layout is the information, so it has to fill
+          // the frame to be read at all.
+          cooldownTicks={120}
+          d3VelocityDecay={0.3}
+          onEngineStop={() => graphRef.current?.zoomToFit(400, 60)}
           onLinkClick={(link) => setSelectedLink(link as GraphLink)}
           onNodeClick={(node) => onSelectIssue?.(node as GraphNode)}
           ref={graphRef as unknown as React.ComponentProps<typeof ForceGraph2D>['ref']}
