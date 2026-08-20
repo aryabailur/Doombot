@@ -41,6 +41,7 @@ import {
   listEscalations,
   listInvestigations,
   postFeedback,
+  scanRepository,
   WS_URL,
 } from '@/lib/api'
 import type { Escalation, HealthResponse, RepoSummary } from '@/lib/types'
@@ -132,8 +133,12 @@ function OverviewPage({ repoName }: { repoName: string }) {
   const health = useApiData<HealthResponse>(() => getRepoHealth(owner, repo), {
     pollMs: 60_000,
   })
-  const escalations = useApiData(() => listEscalations(), { pollMs: 20_000 })
-  const investigations = useApiData(() => listInvestigations(), {
+  // Scoped to the selected repository. Unscoped, every panel showed another
+  // repository's work, which read as "it did not analyse my repo".
+  const escalations = useApiData(() => listEscalations(repoName), {
+    pollMs: 20_000,
+  })
+  const investigations = useApiData(() => listInvestigations(repoName), {
     pollMs: 20_000,
   })
 
@@ -201,7 +206,7 @@ function OverviewPage({ repoName }: { repoName: string }) {
   )
 }
 
-function EscalationsPage() {
+function EscalationsPage({ repoName }: { repoName: string }) {
   const navigate = useNavigate()
   const [filters, setFilters] = useState<EscalationFilters>({})
   const [selectedId, setSelectedId] = useState<string | undefined>()
@@ -209,7 +214,9 @@ function EscalationsPage() {
     Record<string, EscalationRow['status']>
   >({})
 
-  const escalations = useApiData(() => listEscalations(), { pollMs: 20_000 })
+  const escalations = useApiData(() => listEscalations(repoName), {
+    pollMs: 20_000,
+  })
 
   const rows = (escalations.data ?? []).map((item) => {
     const row = toRow(item)
@@ -261,10 +268,10 @@ function EscalationsPage() {
   )
 }
 
-function InvestigationsPage() {
+function InvestigationsPage({ repoName }: { repoName: string }) {
   const navigate = useNavigate()
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const investigations = useApiData(() => listInvestigations(), {
+  const investigations = useApiData(() => listInvestigations(repoName), {
     pollMs: 15_000,
   })
 
@@ -410,6 +417,8 @@ export function App() {
    */
   const [addedRepos, setAddedRepos] = useState<string[]>([])
   const [indexing, setIndexing] = useState(false)
+  const [scanning, setScanning] = useState(false)
+  const [scanNote, setScanNote] = useState<string | null>(null)
   const [owner, repo] = splitRepo(repoName)
 
   const repos = useApiData(() => getRepos(), {})
@@ -438,6 +447,31 @@ export function App() {
                   setIndexing(false)
                 }
               }}
+              isScanning={scanning}
+              onScanRequested={async (target) => {
+                setScanning(true)
+                setScanNote(null)
+                try {
+                  const [scanOwner, scanRepo] = splitRepo(target.repo_name)
+                  const result = await scanRepository(scanOwner, scanRepo)
+                  // Say what happened. "Nothing queued" is a real and
+                  // common outcome -- every open issue already investigated --
+                  // and silence there is indistinguishable from a failure.
+                  setScanNote(
+                    result.queued.length > 0
+                      ? `Investigating ${result.queued.length} issue${result.queued.length === 1 ? '' : 's'} in ${result.repo_name}.`
+                      : `Nothing new to investigate in ${result.repo_name}.`,
+                  )
+                } catch (cause) {
+                  setScanNote(
+                    cause instanceof Error
+                      ? `Could not analyse: ${cause.message}`
+                      : 'Could not analyse that repository.',
+                  )
+                } finally {
+                  setScanning(false)
+                }
+              }}
               onAddRepository={async (name) => {
                 // Indexing is what actually registers a repository: the
                 // backend derives /api/repos from history plus the monitor
@@ -458,6 +492,16 @@ export function App() {
                 (item) => item.repo_name === repoName,
               )}
             />
+            {scanNote ? (
+              <button
+                className="max-w-md truncate rounded-md border border-border bg-surface-2 px-2 py-1 text-left text-xs text-text-secondary"
+                onClick={() => setScanNote(null)}
+                title={`${scanNote} (click to dismiss)`}
+                type="button"
+              >
+                {scanNote}
+              </button>
+            ) : null}
             <AgentStatusIndicator
               className="ml-auto"
               connectionState={connectionState}
@@ -473,8 +517,14 @@ export function App() {
             element={<OverviewPage repoName={repoName} />}
             path="/overview"
           />
-          <Route element={<EscalationsPage />} path="/escalations" />
-          <Route element={<InvestigationsPage />} path="/investigations" />
+          <Route
+            element={<EscalationsPage repoName={repoName} />}
+            path="/escalations"
+          />
+          <Route
+            element={<InvestigationsPage repoName={repoName} />}
+            path="/investigations"
+          />
           <Route
             element={<InvestigationDetailPage />}
             path="/investigations/:id"

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 
-import { DatabaseZap, FolderGit2, Loader2, Plus } from 'lucide-react'
+import { DatabaseZap, FolderGit2, Loader2, Plus, ScanSearch } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -30,7 +30,10 @@ export interface RepositorySelectorProps {
    * caller owns indexing and error reporting.
    */
   onAddRepository?: (repoName: string) => Promise<void>
+  /** Investigate the repository's open issues. */
+  onScanRequested?: (repo: RepoSummary) => Promise<void>
   isIndexing?: boolean
+  isScanning?: boolean
   className?: string
 }
 
@@ -87,7 +90,9 @@ export function RepositorySelector({
   onSelect,
   onIndexRequested,
   onAddRepository,
+  onScanRequested,
   isIndexing = false,
+  isScanning = false,
   className,
 }: RepositorySelectorProps) {
   const [adding, setAdding] = useState(false)
@@ -262,6 +267,33 @@ export function RepositorySelector({
             <>
               <DatabaseZap aria-hidden="true" className="size-4" />
               Index
+            </>
+          )}
+        </Button>
+      ) : null}
+      {selectedRepo && onScanRequested ? (
+        <Button
+          aria-label={`Analyse ${selectedRepo.repo_name}`}
+          className="h-9"
+          disabled={isScanning}
+          onClick={() => {
+            void onScanRequested(selectedRepo)
+          }}
+          size="sm"
+          type="button"
+        >
+          {isScanning ? (
+            <>
+              <Loader2
+                aria-hidden="true"
+                className="size-4 motion-safe:animate-spin"
+              />
+              Analysing…
+            </>
+          ) : (
+            <>
+              <ScanSearch aria-hidden="true" className="size-4" />
+              Analyse
             </>
           )}
         </Button>
