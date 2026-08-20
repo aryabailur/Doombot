@@ -1,5 +1,6 @@
 import type {
   CodeGraphResponseApi,
+  SourceFileApi,
   IssueGraphResponseApi,
   RepoSummaryApi,
   HealthResponseApi,
@@ -143,5 +144,22 @@ export function getCodeGraph(
     .join("&");
   return request(
     `/api/repos/${owner}/${repo}/code-graph${query ? `?${query}` : ""}`
+  );
+}
+
+/**
+ * One repository file, for the explorer's code pane.
+ *
+ * Fetched per click rather than bundled into the code graph: sixty files of
+ * source would multiply that payload for content nobody reads until they open
+ * a file. Cached server-side, so clicking back through a subsystem is free.
+ */
+export function getSourceFile(
+  owner: string,
+  repo: string,
+  path: string
+): Promise<SourceFileApi> {
+  return request(
+    `/api/repos/${owner}/${repo}/source?path=${encodeURIComponent(path)}`
   );
 }

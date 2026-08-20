@@ -416,3 +416,76 @@ Adapted from DESIGN.md §14. A component or screen is not done until:
 - [ ] Verified against realistic fixture/mock data, not `{}`
 - [ ] Rebased onto `origin/main`, PR filled out per root `CLAUDE.md` §6
       template, branch prefixed `feat/c-` or `feat/d-`
+
+---
+
+## 14. The graph explorer (`src/components/explorer/`) — added 2026-08-21
+
+**Status note first:** §3's `src/` tree and §4's neo-brutalist tokens are both
+stale. The dashboard shipped a page-based structure (`src/pages/*.tsx`) and a
+light "Calm Control Room" palette in `index.css`. Neither §3 nor §4 was updated
+at the time. They are left in place as history; **`index.css` is the palette of
+record.**
+
+This section covers the one subtree that deliberately sits outside the rules
+above, and says why.
+
+### What it is
+
+A full-bleed graph workspace on the `/graphs` route, modelled closely on
+CodeGraphContext's viewer (`website/src/components/CodeGraphViewer.tsx` in that
+project). It renders RepoGuardian's two existing graphs — the semantic code
+graph and the issue relationship graph — with a project tree, a source/entities/
+architecture panel, eight visualization modes, and path traversal.
+
+### Files
+
+```text
+src/pages/Graphs.tsx                     thin shell: two fetches, source switch, theme
+src/components/explorer/
+  theme.ts            palette, kind/edge colours, mode list, canvas helpers
+  tree.ts             buildTree / collapseSingleChildDirs / extension colours (pure)
+  analysis.ts         Tarjan cycles, orphans, hubs, BFS shortest path (pure)
+  summary.ts          deterministic symbol summaries — no model (pure)
+  FileTree.tsx        one tree row
+  StatBar.tsx         floating stat strip + warning badges
+  Legend.tsx          collapsible legend overlay
+  ConfigPanel.tsx     appearance + structure filters
+  PathPanel.tsx       path traversal sidebar mode
+  DetailPanel.tsx     right panel: Code / Entities / Architecture
+  FlowchartSvg.tsx    layered SVG diagram mode
+  Graph3D.tsx         City 3D + 3D Graph — the only file importing three/-3d
+  chrome.tsx          shared shell bits: viewport size, drag-resize, pills, menus
+  CodeExplorer.tsx    the code structure explorer
+  IssueExplorer.tsx   the issue relationship explorer
+```
+
+Add nothing to this list without editing it first (root rule #2).
+
+### Deviations from §12, and why
+
+Three of §12's conventions do not hold inside `explorer/`. Each is a
+consequence of the surface being a canvas with a runtime-switchable theme, not
+a preference:
+
+1. **Inline styles are used throughout.** The explorer has its own dark/light
+   palette (`theme.ts`) *and* per-node-kind colours the reader edits with a
+   colour picker. A Tailwind class cannot carry a hex chosen at runtime, and
+   the canvas renderer needs literal colour strings at paint time regardless.
+   Layout still uses Tailwind; only colour and computed size are inline.
+2. **`any` appears at the force-graph boundary.** `react-force-graph-2d` and
+   `-3d` type their node and link callbacks as loose records, and their imperative
+   handles (`zoom`, `centerAt`, `zoomToFit`) are not exported as a usable type.
+   Payloads are cast to the real `types.ts` shape at the top of each callback,
+   which is where the narrowing §12 asks for actually happens.
+3. **`Graph3D.tsx` is a default export.** `React.lazy` requires one. Every
+   other file in the folder is a named export.
+
+### The one rule that matters most here
+
+`Graph3D.tsx` must remain the **only** file importing `three` or
+`react-force-graph-3d`, and must only ever be reached through `React.lazy`.
+Together those packages are 343 kB gzipped — larger than the rest of the
+dashboard combined. A static import anywhere else silently moves that into the
+entry bundle that all twelve routes wait on. Check `npm run build`'s chunk list
+after touching this folder: `Graph3D-*.js` should be its own chunk.

@@ -265,4 +265,19 @@ export interface CodeGraphResponseApi {
     attribution: string;
   };
   impact: Record<string, unknown>;
+  /**
+   * Every source file the build read, including files that parsed to zero
+   * symbols. The explorer's file tree is built from this rather than from node
+   * paths, so a file with no symbols is still browsable.
+   */
+  files: string[];
+}
+
+/** One file's contents, read on demand for the explorer's code pane. */
+export interface SourceFileApi {
+  path: string;
+  content: string;
+  lines: number;
+  language: string;
+  truncated: boolean;
 }

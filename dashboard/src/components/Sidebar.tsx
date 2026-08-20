@@ -43,7 +43,7 @@ const NAV_GROUPS: { label: string | null; items: NavItem[] }[] = [
     items: [
       { to: "/health", label: "Project Health", icon: Activity },
       { to: "/memory", label: "Project Memory", icon: BrainCircuit },
-      { to: "/graphs", label: "Graphs", icon: Share2 },
+      { to: "/graphs", label: "Graph Explorer", icon: Share2 },
     ],
   },
   {

@@ -9,11 +9,13 @@
 import logging
 import uuid
 from datetime import datetime, timezone
+from pathlib import PurePosixPath
 
-from fastapi import APIRouter, BackgroundTasks, Query
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 
 from api.schemas import (
     CodeGraphResponse,
+    SourceFileResponse,
     GraphResponse,
     ActivityEvent,
     ActivityPage,
@@ -387,3 +389,78 @@ def get_code_graph(
     repo_name = f"{owner}/{repo}"
     graph = _cached_code_graph(repo_name, tuple(sorted(set(changed_path))))
     return CodeGraphResponse.model_validate(graph)
+
+
+# Largest file the code pane will render. Beyond this the browser spends longer
+# laying out line divs than anyone spends reading them, and the payload stops
+# being worth the transfer.
+MAX_SOURCE_BYTES = 400_000
+
+_SOURCE_LANGUAGES = {
+    ".py": "python",
+    ".ts": "typescript",
+    ".tsx": "tsx",
+    ".js": "javascript",
+    ".jsx": "jsx",
+    ".json": "json",
+    ".md": "markdown",
+    ".yml": "yaml",
+    ".yaml": "yaml",
+    ".toml": "toml",
+    ".sh": "shell",
+    ".css": "css",
+    ".html": "html",
+}
+
+
+@lru_cache(maxsize=256)
+def _cached_source(repo_name: str, path: str) -> str | None:
+    """One GitHub read per file, cached.
+
+    The explorer loads a file every time the reader clicks one in the tree, and
+    clicking back and forth through a subsystem is the normal way to use it.
+    Uncached that is a GitHub request per click against a 5000/hour quota shared
+    across the whole account.
+    """
+    from mcp_server.github_client import get_file_content
+
+    try:
+        return get_file_content(repo_name, path)
+    except Exception:
+        logger.warning("source read failed for %s:%s", repo_name, path, exc_info=True)
+        return None
+
+
+@router.get("/api/repos/{owner}/{repo}/source", response_model=SourceFileResponse)
+def get_source_file(owner: str, repo: str, path: str = Query(...)) -> SourceFileResponse:
+    """One file's contents, for the code explorer's code pane.
+
+    Read-only. `path` is repository-relative and passed straight to the GitHub
+    contents API, which resolves it inside the repository -- there is no local
+    filesystem in the path, so traversal has nothing to reach. Leading slashes
+    and `..` segments are still stripped so a malformed path fails cleanly as a
+    404 rather than as a confusing GitHub error.
+    """
+    clean = "/".join(
+        part for part in path.replace("\\", "/").split("/") if part and part != ".."
+    )
+    if not clean:
+        raise HTTPException(status_code=400, detail="path is required")
+
+    repo_name = f"{owner}/{repo}"
+    content = _cached_source(repo_name, clean)
+    if content is None:
+        raise HTTPException(status_code=404, detail=f"{clean} could not be read")
+
+    truncated = len(content.encode("utf-8", "ignore")) > MAX_SOURCE_BYTES
+    if truncated:
+        content = content[: MAX_SOURCE_BYTES // 2]
+
+    suffix = PurePosixPath(clean).suffix.lower()
+    return SourceFileResponse(
+        path=clean,
+        content=content,
+        lines=content.count("\n") + 1,
+        language=_SOURCE_LANGUAGES.get(suffix, suffix.lstrip(".") or "text"),
+        truncated=truncated,
+    )

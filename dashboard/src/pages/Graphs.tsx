@@ -1,108 +1,68 @@
-import {
-  lazy,
-  Suspense,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
-import { Network, Code2 } from "lucide-react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { Code2, Loader2, LogOut, Network } from "lucide-react";
 
 import { useRepo } from "../lib/RepoContext";
 import { getCodeGraph, getIssueGraph } from "../lib/api";
-import type {
-  CodeGraphResponseApi,
-  IssueGraphLinkApi,
-  IssueGraphNodeApi,
-  IssueGraphResponseApi,
-} from "../lib/types";
+import type { CodeGraphResponseApi, IssueGraphResponseApi } from "../lib/types";
+import { Pill } from "../components/explorer/chrome";
+import { ACCENT, PALETTE } from "../components/explorer/theme";
 
 /**
- * react-force-graph-2d touches `window` at module scope, so a static import
- * throws wherever there is no DOM. It also pulls in d3-force, which is by far
- * the heaviest dependency here and is needed on exactly one route -- lazy
- * loading keeps it out of the initial bundle for the other eleven.
- */
-const ForceGraph2D = lazy(() => import("react-force-graph-2d"));
-
-type View = "issues" | "code";
-
-/**
- * Colours are read from the stylesheet rather than hardcoded.
+ * Both explorers are lazily loaded.
  *
- * The canvas renderer needs literal colour strings -- it cannot resolve a
- * Tailwind class -- but duplicating the palette here would let it drift from
- * index.css. Reading the custom property at paint time keeps the graph on the
- * same palette as every other surface.
+ * They are only reachable from this one route, and between them they pull in
+ * the canvas renderers, the layout code, and the analysis passes. Loaded
+ * eagerly they would sit in the entry bundle that the other eleven routes have
+ * to download before anything renders.
  */
-function token(name: string): string {
-  if (typeof window === "undefined") return "#111111";
-  const value = getComputedStyle(document.documentElement)
-    .getPropertyValue(name)
-    .trim();
-  return value || "#111111";
-}
+const CodeExplorer = lazy(() =>
+  import("../components/explorer/CodeExplorer").then((module) => ({
+    default: module.CodeExplorer,
+  }))
+);
+const IssueExplorer = lazy(() =>
+  import("../components/explorer/IssueExplorer").then((module) => ({
+    default: module.IssueExplorer,
+  }))
+);
 
-const CATEGORY_TOKEN: Record<string, string> = {
-  security: "--danger",
-  duplicate: "--info",
-  stale: "--warning",
-  resolved: "--success",
-  open: "--muted",
-};
+type Source = "issues" | "code";
 
-const CATEGORY_LABEL: Record<string, string> = {
-  security: "Security",
-  duplicate: "Duplicate",
-  stale: "Stale",
-  resolved: "Resolved",
-  open: "Open",
-};
+const THEME_KEY = "repoguardian.explorer.theme";
 
-const LINK_LABEL: Record<string, string> = {
-  duplicate: "Likely duplicate",
-  similar: "Related",
-  reference: "Explicit reference",
-  metadata: "Shared label",
-};
-
-/** The simulation replaces string endpoints with node objects after tick one. */
-function endpointId(endpoint: unknown): string {
-  if (typeof endpoint === "string") return endpoint;
-  if (endpoint && typeof endpoint === "object" && "id" in endpoint) {
-    return String((endpoint as { id: unknown }).id);
-  }
-  return "";
-}
-
-function linkKey(link: { source: unknown; target: unknown }): string {
-  return `${endpointId(link.source)}->${endpointId(link.target)}`;
-}
-
+/**
+ * The graph explorer route: a full-bleed, CodeGraphContext-style workspace over
+ * RepoGuardian's two graphs.
+ *
+ * This page is deliberately a thin shell. It owns the two fetches, the source
+ * switch, and the theme, and nothing else — the previous version held both
+ * canvases, both filter sets, both painters and two focus models in one
+ * ~700-line component, where any change to one half risked the other.
+ *
+ * It renders as `fixed inset-0` over the dashboard chrome rather than inside the
+ * page column, which is what makes the canvas full-bleed. "Exit" goes back to
+ * the Command Center.
+ */
 export function Graphs() {
   const { repoName } = useRepo();
-  const [view, setView] = useState<View>("issues");
+  const navigate = useNavigate();
+
+  const [source, setSource] = useState<Source>("code");
+  const [isDark, setIsDark] = useState(() => {
+    try {
+      return window.localStorage.getItem(THEME_KEY) !== "light";
+    } catch {
+      return true;
+    }
+  });
 
   const [issueGraph, setIssueGraph] = useState<IssueGraphResponseApi | null>(null);
-  const [codeGraph, setCodeGraph] = useState<CodeGraphResponseApi | null>(null);
   const [issueError, setIssueError] = useState<string | null>(null);
+  const [codeGraph, setCodeGraph] = useState<CodeGraphResponseApi | null>(null);
   const [codeError, setCodeError] = useState<string | null>(null);
-  /** Real state, not derived: the code graph is fetched on demand, so "not
-   *  loaded yet" and "loading now" are different things to show. */
+  /** Real state, not derived: "not fetched yet" and "fetching now" differ. */
   const [loadingCode, setLoadingCode] = useState(false);
-
-  const [hidden, setHidden] = useState<Set<string>>(new Set());
-  const [selectedLink, setSelectedLink] = useState<IssueGraphLinkApi | null>(null);
-  const [hoveredId, setHoveredId] = useState<string | null>(null);
-  /** Hide low-connectivity symbols; the full code graph is a hairball. */
-  const [minDegree, setMinDegree] = useState(2);
-  const [subsystem, setSubsystem] = useState<string>("");
-  const [hoveredCodeId, setHoveredCodeId] = useState<string | null>(null);
-  const [selectedCode, setSelectedCode] = useState<
-    CodeGraphResponseApi["nodes"][number] | null
-  >(null);
-  const [runtimes, setRuntimes] = useState<Set<string>>(new Set());
 
   const [owner, repo] = repoName.split("/");
 
@@ -110,27 +70,31 @@ export function Graphs() {
    * Which repository the in-flight requests belong to.
    *
    * The code graph can take the better part of a minute, which is long enough
-   * for the reader to switch repositories mid-flight. Without this key, two
-   * things went wrong: the stale response resolved and populated the *previous*
-   * repository's graph under the new repository's name, and `loadingCode`
-   * stayed true so the guard below blocked the new fetch permanently -- the
-   * panel sat on "Reading source…" for a repository nobody was ever fetching.
+   * for the reader to switch repositories mid-flight. Without this key two
+   * things went wrong: the stale response populated the *previous* repository's
+   * graph under the new name, and `loadingCode` stayed true so the guard below
+   * blocked the new fetch permanently — the panel sat on "Reading source…" for
+   * a request nobody was making.
    */
   const requestKey = `${owner}/${repo}`;
   const activeKey = useRef(requestKey);
   activeKey.current = requestKey;
 
   useEffect(() => {
+    try {
+      window.localStorage.setItem(THEME_KEY, isDark ? "dark" : "light");
+    } catch {
+      // A blocked localStorage is not worth failing the render over.
+    }
+  }, [isDark]);
+
+  useEffect(() => {
     setIssueGraph(null);
-    setCodeGraph(null);
     setIssueError(null);
+    setCodeGraph(null);
     setCodeError(null);
-    setSelectedLink(null);
-    setSubsystem("");
-    setSelectedCode(null);
-    setHoveredCodeId(null);
-    // Reset explicitly: a fetch still running for the previous repository
-    // would otherwise keep this true and starve the next one.
+    // Reset explicitly: a fetch still running for the previous repository would
+    // otherwise keep this true and starve the next one.
     setLoadingCode(false);
 
     if (!owner || !repo) return;
@@ -143,20 +107,22 @@ export function Graphs() {
       })
       .catch(() => {
         if (activeKey.current !== key) return;
-        setIssueError("Could not load the issue graph. Index the repository first.");
+        setIssueError(
+          "Could not load the issue graph. Index this repository first."
+        );
       });
   }, [owner, repo, requestKey]);
 
   /**
-   * The code graph is fetched only once its tab is opened.
+   * The code graph is fetched only once its view is opened.
    *
-   * It reads every source file in the repository -- one GitHub request each --
+   * It reads every source file in the repository — one GitHub request each —
    * and measured 43s on yt-dlp. Fetching it alongside the issue graph meant
-   * simply opening this page paid that cost even for someone who never left
-   * the Issues tab. Requested on demand, and once per repository.
+   * simply opening this page paid that cost even for someone who only ever
+   * looked at issues. Requested on demand, and once per repository.
    */
   useEffect(() => {
-    if (view !== "code" || !owner || !repo) return;
+    if (source !== "code" || !owner || !repo) return;
     if (codeGraph !== null || codeError !== null || loadingCode) return;
 
     const key = requestKey;
@@ -174,637 +140,87 @@ export function Graphs() {
         if (activeKey.current !== key) return;
         setLoadingCode(false);
       });
-  }, [view, owner, repo, requestKey, codeGraph, codeError, loadingCode]);
+  }, [source, owner, repo, requestKey, codeGraph, codeError, loadingCode]);
 
-  /**
-   * Start the filter where the graph is legible for *this* repository.
-   *
-   * A fixed default cannot serve both: 2 is right for a 250-symbol project and
-   * useless on yt-dlp, where it still leaves 471 nodes and 1064 edges. Raise
-   * the floor until the first render is readable; the slider then goes wherever
-   * the reader wants from there.
-   */
-  useEffect(() => {
-    if (!codeGraph) return;
-    const nodes = codeGraph.nodes;
-    for (const floor of [2, 3, 5, 8]) {
-      const kept = nodes.filter(
-        (n) => n.in_degree + n.out_degree >= floor
-      ).length;
-      if (kept <= 320) {
-        setMinDegree(floor);
-        return;
-      }
-    }
-    setMinDegree(8);
-  }, [codeGraph]);
+  const pal = isDark ? PALETTE.dark : PALETTE.light;
 
-  // ---- issue graph -------------------------------------------------------
-
-  const issueData = useMemo(() => {
-    const nodes = (issueGraph?.nodes ?? []).filter((n) => !hidden.has(n.category));
-    const ids = new Set(nodes.map((n) => n.id));
-    return {
-      // Cloned: the simulation mutates its input, adding x/y to every node.
-      nodes: nodes.map((n) => ({ ...n })),
-      links: (issueGraph?.links ?? [])
-        .filter((l) => ids.has(l.source) && ids.has(l.target))
-        .map((l) => ({ ...l })),
-    };
-  }, [issueGraph, hidden]);
-
-  const neighbourhood = useMemo(() => {
-    if (!hoveredId) return null;
-    const nodeIds = new Set<string>([hoveredId]);
-    const edges = new Set<string>();
-    for (const link of issueGraph?.links ?? []) {
-      if (link.source === hoveredId || link.target === hoveredId) {
-        nodeIds.add(link.source);
-        nodeIds.add(link.target);
-        edges.add(`${link.source}->${link.target}`);
-      }
-    }
-    return { nodeIds, edges };
-  }, [hoveredId, issueGraph]);
-
-  /** The hovered issue itself, for the caption line under the canvas. */
-  const hoveredIssue = useMemo(
-    () => (issueGraph?.nodes ?? []).find((n) => n.id === hoveredId) ?? null,
-    [issueGraph, hoveredId]
-  );
-
-  const categoryCounts = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const node of issueGraph?.nodes ?? []) {
-      counts.set(node.category, (counts.get(node.category) ?? 0) + 1);
-    }
-    return counts;
-  }, [issueGraph]);
-
-  const unconnected = useMemo(() => {
-    const linked = new Set<string>();
-    for (const link of issueData.links) {
-      linked.add(endpointId(link.source));
-      linked.add(endpointId(link.target));
-    }
-    return issueData.nodes.filter((n) => !linked.has(n.id)).length;
-  }, [issueData]);
-
-  const paintIssueNode = useCallback(
-    (raw: object, ctx: CanvasRenderingContext2D, scale: number) => {
-      const node = raw as IssueGraphNodeApi & { x?: number; y?: number };
-      const x = node.x ?? 0;
-      const y = node.y ?? 0;
-      const radius = 6 + Math.min(4, Math.sqrt(node.engagement) * 1.4);
-      const colour = token(CATEGORY_TOKEN[node.category] ?? "--muted");
-
-      const focused = neighbourhood ? neighbourhood.nodeIds.has(node.id) : true;
-      ctx.globalAlpha = focused ? 1 : 0.15;
-
-      if (node.escalated) {
-        ctx.beginPath();
-        ctx.arc(x, y, radius + 3.5, 0, Math.PI * 2);
-        ctx.strokeStyle = colour;
-        ctx.lineWidth = 1.2 / scale;
-        ctx.stroke();
-      }
-
-      ctx.beginPath();
-      ctx.arc(x, y, radius, 0, Math.PI * 2);
-      ctx.fillStyle = colour;
-      ctx.fill();
-      // A light rim keeps touching nodes from fusing into one blob on a pale
-      // background.
-      ctx.lineWidth = 1.5 / scale;
-      ctx.strokeStyle = token("--card");
-      ctx.stroke();
-
-      const fontSize = Math.min(13, Math.max(9, 11 / scale));
-      ctx.font = `600 ${fontSize}px ui-monospace, SFMono-Regular, monospace`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "top";
-      ctx.fillStyle = token("--ink");
-      ctx.fillText(`#${node.number}`, x, y + radius + 2 / scale);
-
-      ctx.globalAlpha = 1;
-    },
-    [neighbourhood]
-  );
-
-  // ---- code graph --------------------------------------------------------
-
-  /**
-   * Distinct values per filterable dimension, with counts.
-   *
-   * A filter offering one option is noise, not a control -- every symbol in
-   * express is runtime "shared", so a runtime filter there would just take up
-   * space. Each control below renders only when its dimension actually varies.
-   */
-  const codeFacets = useMemo(() => {
-    const clusters = new Map<string, number>();
-    const runtimeCounts = new Map<string, number>();
-    for (const node of codeGraph?.nodes ?? []) {
-      clusters.set(node.cluster_label, (clusters.get(node.cluster_label) ?? 0) + 1);
-      runtimeCounts.set(node.runtime, (runtimeCounts.get(node.runtime) ?? 0) + 1);
-    }
-    return { clusters, runtimes: runtimeCounts };
-  }, [codeGraph]);
-
-  const codeData = useMemo(() => {
-    const nodes = (codeGraph?.nodes ?? []).filter((n) => {
-      if (subsystem && n.cluster_label !== subsystem) return false;
-      // An empty set means "no restriction" rather than "hide everything", so
-      // the filters start open.
-      if (runtimes.size > 0 && !runtimes.has(n.runtime)) return false;
-      if (minDegree > 0 && n.in_degree + n.out_degree < minDegree) return false;
-      return true;
-    });
-    const ids = new Set(nodes.map((n) => n.id));
-    // Server positions seed the layout; they do not pin it.
-    //
-    // Pinning with fx/fy made this a static picture -- nothing settled, nothing
-    // could be dragged, and the whole thing read as a diagram rather than a
-    // graph. Seeding instead means the simulation starts from a sensible
-    // arrangement (so it converges in a second rather than flailing) and then
-    // behaves like a real force graph: it relaxes, it responds, nodes can be
-    // pulled around to untangle a cluster.
-    const scale = 18;
-    return {
-      nodes: nodes.map((n) => ({
-        ...n,
-        x: n.x2d * scale,
-        y: n.y2d * scale,
-      })),
-      links: (codeGraph?.links ?? [])
-        .filter((l) => ids.has(l.source) && ids.has(l.target))
-        .map((l) => ({ ...l })),
-    };
-  }, [codeGraph, minDegree, subsystem]);
-
-  /** The focused symbol and everything one dependency away from it. */
-  const codeFocus = useMemo(() => {
-    if (!hoveredCodeId) return null;
-    const nodeIds = new Set<string>([hoveredCodeId]);
-    const edges = new Set<string>();
-    for (const link of codeGraph?.links ?? []) {
-      if (link.source === hoveredCodeId || link.target === hoveredCodeId) {
-        nodeIds.add(link.source);
-        nodeIds.add(link.target);
-        edges.add(`${link.source}->${link.target}`);
-      }
-    }
-    return { nodeIds, edges };
-  }, [hoveredCodeId, codeGraph]);
-
-  const clusterColour = useCallback(
-    (cluster: string) => {
-      const palette = ["--accent", "--info", "--success", "--warning", "--security"];
-      const clusters = codeGraph?.stats.clusters ?? [];
-      const index = Math.max(0, clusters.indexOf(cluster));
-      return token(palette[index % palette.length]);
-    },
-    [codeGraph]
-  );
-
-  const paintCodeNode = useCallback(
-    (raw: object, ctx: CanvasRenderingContext2D, scale: number) => {
-      const node = raw as CodeGraphResponseApi["nodes"][number] & {
-        x?: number;
-        y?: number;
-      };
-      const x = node.x ?? 0;
-      const y = node.y ?? 0;
-      const radius = 4 + Math.min(5, node.hub_score * 9);
-      const colour = clusterColour(node.cluster_label);
-
-      const focused = codeFocus ? codeFocus.nodeIds.has(node.id) : true;
-      const isRoot = node.id === hoveredCodeId;
-      const isSelected = node.id === selectedCode?.id;
-      ctx.globalAlpha = focused ? 1 : 0.12;
-
-      // A halo under the focused symbol and its neighbours, so a selection is
-      // findable in a graph of several hundred nodes.
-      if (focused && codeFocus) {
-        const spread = radius * (isRoot ? 3.4 : 2.2);
-        ctx.globalAlpha = isRoot ? 0.32 : 0.16;
-        ctx.beginPath();
-        ctx.arc(x, y, spread, 0, Math.PI * 2);
-        ctx.fillStyle = colour;
-        ctx.fill();
-        ctx.globalAlpha = 1;
-      }
-
-      ctx.beginPath();
-      ctx.arc(x, y, radius, 0, Math.PI * 2);
-      ctx.fillStyle = colour;
-      ctx.fill();
-      ctx.lineWidth = (isSelected ? 2.4 : 1.2) / scale;
-      ctx.strokeStyle = isSelected ? token("--ink") : token("--card");
-      ctx.stroke();
-
-      // Labels are the reason the first version read as noise: 129 symbol
-      // names drawn at once overlap into mush and hide the structure they were
-      // meant to explain. Now they appear only where they can be read -- the
-      // focused neighbourhood, the selected node, or once zoomed in past 1.5x.
-      const showLabel =
-        isRoot ||
-        isSelected ||
-        (codeFocus !== null && focused) ||
-        scale > 1.5;
-
-      if (showLabel) {
-        const fontSize = Math.min(13, Math.max(9, 11 / scale));
-        ctx.font = `600 ${fontSize}px ui-monospace, SFMono-Regular, monospace`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "top";
-
-        // A card-coloured plate behind the text, so a label crossing an edge
-        // stays readable instead of blending into the line.
-        const label = node.symbol_name;
-        const width = ctx.measureText(label).width;
-        const padding = 3 / scale;
-        ctx.fillStyle = token("--card");
-        ctx.globalAlpha = focused ? 0.85 : 0;
-        ctx.fillRect(
-          x - width / 2 - padding,
-          y + radius + 1 / scale,
-          width + padding * 2,
-          fontSize + padding
-        );
-
-        ctx.globalAlpha = focused ? 1 : 0.12;
-        ctx.fillStyle = token("--ink");
-        ctx.fillText(label, x, y + radius + 2 / scale);
-      }
-
-      ctx.globalAlpha = 1;
-    },
-    [clusterColour, codeFocus, hoveredCodeId, selectedCode]
-  );
-
-  function toggleCategory(category: string) {
-    setHidden((current) => {
-      const next = new Set(current);
-      if (next.has(category)) next.delete(category);
-      else next.add(category);
-      return next;
-    });
-  }
-
-  const loadingIssues = issueGraph === null && issueError === null;
-
-  return (
-    <div className="flex flex-col gap-8">
-      <div>
-        <h1 className="text-2xl font-extrabold text-ink">Graphs</h1>
-        <p className="text-sm text-muted">
-          How {repoName}'s issues relate, and how its code fits together. The
-          layout is the information — clusters are real, not decorative.
-        </p>
-      </div>
-
-      <div className="flex w-fit items-center gap-1 rounded-xl border border-border bg-card p-1 shadow-flat-sm">
+  const controls = (
+    <>
+      <Pill pal={pal} onClick={() => navigate("/")} title="Back to the dashboard">
+        <LogOut className="h-3.5 w-3.5 text-red-400" />
+        Exit
+      </Pill>
+      <div
+        className="flex items-center gap-1 rounded-full border p-1 shadow-2xl backdrop-blur-md"
+        style={{ background: pal.overlayBg, borderColor: pal.border }}
+      >
         {(
           [
-            { id: "issues" as View, label: "Issue Relationships", icon: Network },
-            { id: "code" as View, label: "Code Structure", icon: Code2 },
-          ]
-        ).map((tab) => (
+            ["code", "Code", Code2],
+            ["issues", "Issues", Network],
+          ] as const
+        ).map(([id, label, Icon]) => (
           <button
-            key={tab.id}
-            onClick={() => setView(tab.id)}
-            className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-bold transition-colors ${
-              view === tab.id
-                ? "bg-ink text-white"
-                : "text-ink/70 hover:bg-background hover:text-ink"
-            }`}
+            key={id}
+            type="button"
+            onClick={() => setSource(id)}
+            className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-bold uppercase tracking-widest transition-colors"
+            style={{
+              background: source === id ? "rgba(168,85,247,0.25)" : "transparent",
+              color: source === id ? pal.text : pal.mutedText,
+            }}
           >
-            <tab.icon className="h-4 w-4" strokeWidth={2.25} />
-            {tab.label}
+            <Icon className="h-3.5 w-3.5" />
+            {label}
           </button>
         ))}
       </div>
+    </>
+  );
 
-      {view === "issues" ? (
-        <section className="flex flex-col gap-4">
-          <div className="flex flex-wrap items-center gap-2">
-            {[...categoryCounts.entries()].map(([category, count]) => {
-              const off = hidden.has(category);
-              return (
-                <button
-                  key={category}
-                  onClick={() => toggleCategory(category)}
-                  aria-pressed={!off}
-                  className={`flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-bold text-ink shadow-flat-sm transition-opacity ${
-                    off ? "opacity-40" : ""
-                  }`}
-                >
-                  <span
-                    aria-hidden
-                    className="h-2 w-2 rounded-full"
-                    style={{
-                      background: `var(${CATEGORY_TOKEN[category] ?? "--muted"})`,
-                    }}
-                  />
-                  {CATEGORY_LABEL[category] ?? category} {count}
-                </button>
-              );
-            })}
-            <span className="ml-auto font-mono text-xs text-muted">
-              {issueData.nodes.length} issues · {issueData.links.length} connections
-              {unconnected > 0 ? ` · ${unconnected} unconnected` : ""}
-            </span>
-          </div>
+  if (!owner || !repo) {
+    return (
+      <div className="rounded-2xl border border-border bg-card p-6 shadow-flat">
+        <h1 className="text-2xl font-extrabold text-ink">Graph explorer</h1>
+        <p className="mt-1 text-sm text-muted">
+          Pick a repository in the sidebar to open its graphs.
+        </p>
+      </div>
+    );
+  }
 
-          <div className="h-[520px] overflow-hidden rounded-2xl border border-border bg-card shadow-flat">
-            {loadingIssues ? (
-              <p className="p-6 text-sm text-muted">Building the graph…</p>
-            ) : issueError ? (
-              <p className="p-6 text-sm text-muted">{issueError}</p>
-            ) : issueData.nodes.length === 0 ? (
-              <p className="p-6 text-sm text-muted">
-                No indexed issues yet — index {repoName} to build this graph.
-              </p>
-            ) : (
-              <Suspense fallback={<p className="p-6 text-sm text-muted">Loading canvas…</p>}>
-                <ForceGraph2D
-                  backgroundColor={token("--card")}
-                  graphData={issueData}
-                  height={520}
-                  cooldownTicks={120}
-                  d3VelocityDecay={0.3}
-                  linkColor={(raw) => {
-                    const link = raw as IssueGraphLinkApi;
-                    if (neighbourhood) {
-                      return neighbourhood.edges.has(linkKey(link))
-                        ? token("--accent")
-                        : token("--border");
-                    }
-                    return link.kind === "reference"
-                      ? token("--accent")
-                      : token("--muted");
-                  }}
-                  linkCurvature={0.12}
-                  linkDirectionalArrowLength={(raw) =>
-                    (raw as IssueGraphLinkApi).kind === "reference" ? 3 : 0
-                  }
-                  linkLineDash={(raw) =>
-                    (raw as IssueGraphLinkApi).kind === "similar" ? [2, 4] : null
-                  }
-                  linkWidth={(raw) => {
-                    const link = raw as IssueGraphLinkApi;
-                    if (neighbourhood) {
-                      return neighbourhood.edges.has(linkKey(link)) ? 2.5 : 0.5;
-                    }
-                    return 0.8 + link.score * 1.2;
-                  }}
-                  nodeCanvasObject={paintIssueNode}
-                  // The library tooltip is a floating black box that
-                  // follows the cursor and covers the very neighbours the
-                  // hover exists to reveal. The same information is in the
-                  // panel below and the caption, which occlude nothing.
-                  nodeLabel={() => ""}
-                  onLinkClick={(raw) => setSelectedLink(raw as IssueGraphLinkApi)}
-                  onNodeHover={(raw) =>
-                    setHoveredId(raw ? (raw as IssueGraphNodeApi).id : null)
-                  }
-                />
-              </Suspense>
-            )}
-          </div>
-
-          {/* Every edge can explain itself. An edge a maintainer cannot
-              interrogate is decoration, not evidence. */}
-          {selectedLink ? (
-            <p className="rounded-xl border border-border bg-card px-4 py-3 text-sm text-ink shadow-flat-sm">
-              <span className="font-bold">
-                {LINK_LABEL[selectedLink.kind] ?? selectedLink.kind}
-              </span>{" "}
-              — {selectedLink.why}
-            </p>
-          ) : hoveredIssue ? (
-            // Replaces the tooltip that used to float over the canvas: same
-            // information, in a fixed place, covering nothing.
-            <p className="rounded-xl border border-border bg-card px-4 py-3 text-sm text-ink shadow-flat-sm">
-              <span className="font-mono font-bold">#{hoveredIssue.number}</span>{" "}
-              — {hoveredIssue.title}
-              <span className="ml-2 text-xs text-muted">
-                {CATEGORY_LABEL[hoveredIssue.category] ?? hoveredIssue.category}
-                {hoveredIssue.escalated ? " · escalated" : ""}
-              </span>
-            </p>
-          ) : (
-            <p className="text-xs text-muted">
-              Hover an issue to light its connections. Click a line to see why two
-              issues are linked — solid is a likely duplicate, dashed is related,
-              an arrow is an explicit reference.
-            </p>
-          )}
-        </section>
-      ) : (
-        <section className="flex flex-col gap-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <select
-              value={subsystem}
-              onChange={(event) => setSubsystem(event.target.value)}
-              className="rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-bold text-ink shadow-flat-sm focus-visible:outline-2 focus-visible:outline-ink"
-            >
-              <option value="">All subsystems</option>
-              {[...codeFacets.clusters.entries()]
-                .sort((a, b) => b[1] - a[1])
-                .map(([cluster, count]) => (
-                  <option key={cluster} value={cluster}>
-                    {cluster} ({count})
-                  </option>
-                ))}
-            </select>
-
-            {/* Runtime, only when it varies. Every symbol in express is
-                "shared", so a control with one option would be noise. */}
-            {codeFacets.runtimes.size > 1
-              ? [...codeFacets.runtimes.entries()]
-                  .sort((a, b) => b[1] - a[1])
-                  .map(([runtime, count]) => {
-                    const on = runtimes.has(runtime);
-                    return (
-                      <button
-                        key={runtime}
-                        aria-pressed={on}
-                        onClick={() =>
-                          setRuntimes((current) => {
-                            const next = new Set(current);
-                            if (next.has(runtime)) next.delete(runtime);
-                            else next.add(runtime);
-                            return next;
-                          })
-                        }
-                        className={`rounded-lg border border-border px-2.5 py-1.5 text-xs font-bold shadow-flat-sm transition-colors ${
-                          on ? "bg-ink text-white" : "bg-card text-ink opacity-70"
-                        }`}
-                      >
-                        {runtime} {count}
-                      </button>
-                    );
-                  })
-              : null}
-
-            <label className="flex items-center gap-2 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-bold text-ink shadow-flat-sm">
-              Min connections
-              <input
-                type="range"
-                min={0}
-                max={10}
-                value={minDegree}
-                onChange={(event) => setMinDegree(Number(event.target.value))}
-                className="w-24"
-              />
-              <span className="w-3 font-mono">{minDegree}</span>
-            </label>
-
-            {/* Reset. The initial min-connections floor is chosen for the
-                repository's size, so "show all" has to mean 0 rather than
-                that default -- otherwise the full graph is unreachable. */}
-            {subsystem || runtimes.size > 0 || minDegree > 0 ? (
-              <button
-                onClick={() => {
-                  setSubsystem("");
-                  setRuntimes(new Set());
-                  setMinDegree(0);
-                }}
-                className="rounded-lg px-2 py-1.5 text-xs font-bold text-muted hover:text-ink"
-              >
-                Show all
-              </button>
-            ) : null}
-
-            <span className="ml-auto font-mono text-xs text-muted">
-              {codeData.nodes.length} of {codeGraph?.nodes.length ?? 0} symbols ·{" "}
-              {codeData.links.length} dependencies
-            </span>
-          </div>
-
-          <div className="h-[520px] overflow-hidden rounded-2xl border border-border bg-card shadow-flat">
-            {loadingCode ? (
-              // Naming the reason for the wait. This reads every source file
-              // over the network -- measured at 43s on a large repository --
-              // and an unexplained blank panel for that long reads as broken.
-              <div className="p-6">
-                <p className="text-sm font-bold text-ink">
-                  Reading {repoName}'s source…
-                </p>
-                <p className="mt-1 text-sm text-muted">
-                  Each file is a separate request, so this can take up to a
-                  minute on a large repository. It is cached afterwards.
-                </p>
-              </div>
-            ) : codeError ? (
-              <p className="p-6 text-sm text-muted">{codeError}</p>
-            ) : codeGraph === null ? (
-              <p className="p-6 text-sm text-muted">Opening the code graph…</p>
-            ) : codeData.nodes.length === 0 ? (
-              <p className="p-6 text-sm text-muted">
-                Nothing to show at this filter — lower “min connections”.
-              </p>
-            ) : (
-              <Suspense fallback={<p className="p-6 text-sm text-muted">Loading canvas…</p>}>
-                <ForceGraph2D
-                  backgroundColor={token("--card")}
-                  graphData={codeData}
-                  height={520}
-                  // Let it settle rather than freezing on tick zero, and let
-                  // nodes be dragged -- pulling a cluster apart is how you
-                  // actually read a dense dependency graph.
-                  cooldownTicks={80}
-                  d3VelocityDecay={0.35}
-                  enableNodeDrag
-                  linkColor={(raw) => {
-                    const link = raw as { source: unknown; target: unknown };
-                    if (!codeFocus) return token("--border");
-                    return codeFocus.edges.has(linkKey(link))
-                      ? token("--ink")
-                      : token("--border");
-                  }}
-                  linkDirectionalArrowLength={(raw) =>
-                    codeFocus && codeFocus.edges.has(linkKey(raw as never)) ? 4 : 2
-                  }
-                  linkWidth={(raw) => {
-                    const link = raw as { source: unknown; target: unknown };
-                    if (!codeFocus) return 0.7;
-                    return codeFocus.edges.has(linkKey(link)) ? 2.2 : 0.35;
-                  }}
-                  nodeCanvasObject={paintCodeNode}
-                  // The library tooltip is a floating black box that
-                  // follows the cursor and covers the very neighbours the
-                  // hover exists to reveal. The same information is in the
-                  // panel below and the caption, which occlude nothing.
-                  nodeLabel={() => ""}
-                  onNodeClick={(raw) =>
-                    setSelectedCode(
-                      raw as CodeGraphResponseApi["nodes"][number]
-                    )
-                  }
-                  onNodeHover={(raw) =>
-                    setHoveredCodeId(
-                      raw
-                        ? (raw as CodeGraphResponseApi["nodes"][number]).id
-                        : null
-                    )
-                  }
-                />
-              </Suspense>
-            )}
-          </div>
-
-          {/* Clicking a symbol has to say something, or the interaction is
-              decoration. This is the one place a reader can find out what a
-              dot actually is. */}
-          {selectedCode ? (
-            <div className="rounded-xl border border-border bg-card p-4 shadow-flat-sm">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="break-all font-mono text-sm font-bold text-ink">
-                    {selectedCode.qualname}
-                  </p>
-                  <p className="mt-0.5 break-all font-mono text-xs text-muted">
-                    {selectedCode.file_path}:{selectedCode.start_line}–
-                    {selectedCode.end_line}
-                  </p>
-                </div>
-                <button
-                  onClick={() => setSelectedCode(null)}
-                  className="flex-none text-xs font-bold text-muted hover:text-ink"
-                >
-                  Clear
-                </button>
-              </div>
-              <dl className="mt-3 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
-                {[
-                  ["Subsystem", selectedCode.cluster_label],
-                  ["Kind", selectedCode.kind],
-                  ["Runtime", selectedCode.runtime],
-                  [
-                    "Connections",
-                    `${selectedCode.in_degree} in · ${selectedCode.out_degree} out`,
-                  ],
-                ].map(([label, value]) => (
-                  <div key={label}>
-                    <dt className="text-muted">{label}</dt>
-                    <dd className="font-mono font-bold text-ink">{value}</dd>
-                  </div>
-                ))}
-              </dl>
-            </div>
-          ) : null}
-
-          <p className="text-xs text-muted">
-            Hover a symbol to light what depends on it; click one for its file
-            and connections; drag to pull a cluster apart. Colour is the
-            subsystem, size is how central a symbol is. The layout starts from
-            a server-computed arrangement and then settles, so it opens in
-            roughly the same shape each time rather than somewhere random.
-          </p>
-        </section>
-      )}
+  const fallback = (
+    <div
+      className="fixed inset-0 z-40 flex items-center justify-center"
+      style={{ background: pal.bg }}
+    >
+      <Loader2 className="h-7 w-7 animate-spin" style={{ color: ACCENT }} />
     </div>
+  );
+
+  return (
+    <Suspense fallback={fallback}>
+      {source === "code" ? (
+        <CodeExplorer
+          repoName={repoName}
+          graph={codeGraph}
+          loading={loadingCode || (codeGraph === null && codeError === null)}
+          error={codeError}
+          isDark={isDark}
+          onToggleTheme={() => setIsDark((value) => !value)}
+          controls={controls}
+        />
+      ) : (
+        <IssueExplorer
+          repoName={repoName}
+          graph={issueGraph}
+          loading={issueGraph === null && issueError === null}
+          error={issueError}
+          isDark={isDark}
+          onToggleTheme={() => setIsDark((value) => !value)}
+          controls={controls}
+        />
+      )}
+    </Suspense>
   );
 }
