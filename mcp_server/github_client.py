@@ -3,9 +3,17 @@ from urllib3.util import Retry
 from dotenv import load_dotenv
 import logging
 import os
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
-load_dotenv()
+# Load .env from the repository root rather than the process cwd.
+#
+# `load_dotenv()` searches upward from the *current working directory*, which is
+# fine for `uvicorn` started in the repo but wrong for an MCP client: a client
+# spawns `python -m mcp_server.server` with whatever cwd it likes, finds no
+# .env, and every GitHub call then fails unauthenticated for no visible reason.
+# The repo root is knowable from this file's own location, so use that.
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 github_token=os.getenv("GITHUB_TOKEN")
 
 _client: Github | None = None
