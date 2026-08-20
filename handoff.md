@@ -278,3 +278,203 @@ verified state. In priority order, here's what I'd do next:
    in `api/routes_repos.py` hardcodes `staleness = 70.0` with a "no
    repo-age signal wired yet" comment — this is an intentional, honest
    placeholder, not a bug, but it's the one sub-score that's never real.
+
+
+---
+---
+
+# Handoff — session of 2026-08-20/21 (branch `mayank-dashboard`)
+
+**Everything above this divider belongs to an earlier session on
+`feat/a-core-api-and-dashboard`. It is preserved untouched. This section is a
+separate piece of work on a different branch — read whichever matches the
+branch you are on.**
+
+**Branch:** `mayank-dashboard` @ `0ca68c9` — pushed, **not merged**
+**Base:** `origin/mayank` @ `dd1258d` (untouched)
+**`main`:** `3d53ce1` (untouched, deliberately — the user asked twice that this
+work stay off `main`)
+
+---
+
+## 1. The goal
+
+Take the RepoGuardian dashboard on the `mayank` branch and add the one thing it
+was missing: **both graphs** — the issue-relationship graph and the semantic
+code graph. Explicit constraints from the user:
+
+- Only the dashboard/frontend from `mayank`; do not restructure the rest.
+- Work on a separate branch for safety. **Do not touch `main`.**
+- **Do not touch the VS Code extension or the Chrome extension.** (Stated
+  twice. Verified file-by-file at each commit; neither was modified.)
+
+## 2. What the goal turned out to require
+
+The ask was "only the frontend", but this branch had **no `rag/graph.py` and no
+graph endpoints at all**, so a frontend-only change would have had nothing to
+render. The backend port was unavoidable, and is deliberately minimal and
+additive:
+
+| File | Change |
+|---|---|
+| `rag/graph.py` | **new** — ported verbatim from `main` (both builders) |
+| `api/schemas.py` | appended the F15 models verbatim; later fixed `Evidence.score` |
+| `api/routes_repos.py` | appended `GET .../graph` and `.../code-graph` |
+| `rag/embedder.py` | added `get_collection()` — purely additive |
+| `dashboard/src/pages/Graphs.tsx` | **new** — the page |
+| `dashboard/src/App.tsx` | one route |
+| `dashboard/src/components/Sidebar.tsx` | one nav item |
+| `dashboard/src/lib/types.ts` | graph types (hand-mirrored from schemas) |
+| `dashboard/src/lib/api.ts` | two fetchers |
+| `dashboard/package.json` | `react-force-graph-2d` (new dependency — rule 10) |
+
+Two compatibility details that matter if this is ever re-ported:
+
+- This branch indexes Chroma with `hnsw:space: cosine`; `main` uses L2. Porting
+  `graph.py` is safe **only because** it computes cosine from the raw
+  embeddings itself rather than reading distances.
+- `get_collection` duplicates this branch's Chroma config on purpose, with a
+  comment saying so. If `persist_directory`, the collection-name suffix, or the
+  space drift from `index_issues`, it silently opens a *different, empty*
+  collection and every graph returns zero nodes.
+
+## 3. Current state
+
+Working, verified against live data:
+
+- **Issue graph** — yt-dlp 150 nodes / 655 links.
+- **Code graph** — Doombot 254/283, express 118/106, yt-dlp 1018/1425.
+- **All 12 existing pages** still serve 200; every endpoint the dashboard calls
+  returns 200 with sane payloads.
+- **Investigation detail page** — was completely broken, now fixed (see §5).
+- `tsc` clean, `npm run build` succeeds, force-graph lazy-split into its own
+  ~172 kB chunk so the other eleven routes do not pay for it.
+
+Six commits, each verified before the next:
+
+```
+9d6b471  feat: add both graphs to the RepoGuardian dashboard
+073c6f9  fix: load the code graph on demand and size its filter to the repo
+eb9bc97  fix(api): allow a null evidence score
+2e3d153  fix: make the code graph interactive instead of a static picture
+f0b2e09  fix: stop a slow code-graph fetch stranding the next repository
+0ca68c9  fix: restore the missing graph filters, drop the hover tooltip
+```
+
+## 4. Files actively being edited
+
+`dashboard/src/pages/Graphs.tsx` is the live one — five of six commits touch it.
+It is ~700 lines and holds both graph views in one component, split by a `view`
+state (`"issues" | "code"`). It wants splitting (see §6); it has not yet been.
+
+The backend files are settled and unlikely to need more work.
+
+**Untracked, do not commit:** `chroma_g/` and `vscode-extension/out/` sit in the
+working tree, are **not** gitignored on this branch, and were never staged.
+`git add -A` here would commit build output into the repo. Stage explicitly.
+
+## 5. What failed, and what each failure taught
+
+Recorded because several were my own mistakes, and the reasons matter more than
+the fixes.
+
+**The investigation page was broken before I arrived, and it was a schema bug,
+not a UI bug.** Every detail page showed "Could not load this investigation."
+`GET /api/investigations/{id}` returned 500: `Evidence.score` was declared a
+required `float`, but this repo's own contract (`agents/CLAUDE.md` §3.6) is
+`float | None`, and rule-type evidence legitimately has no score. The schema
+rejected the output of the very nodes it exists to describe. **38 of 38 detail
+pages now return 200; previously 0.** Lesson: when the frontend says "could not
+load", check the endpoint before the component.
+
+**I pinned the code-graph layout and made it a dead picture.** I set `fx`/`fy`
+from server positions with `cooldownTicks={0}`, reasoning that a stable layout
+was a virtue. It was — but nothing settled and nothing could be dragged, so it
+read as a diagram rather than a graph. Server positions now *seed* rather than
+pin: fast convergence and real interaction.
+
+**I drew every node label unconditionally.** 129 symbol names overlapped into
+mush and hid the structure they were meant to explain. Labels are now
+progressive — focused neighbourhood, selected node, or past 1.5x zoom — each on
+a card-coloured plate so a label crossing an edge stays legible.
+
+**I fetched both graphs eagerly on mount.** The code graph reads every source
+file over the network (43s on yt-dlp), so merely opening the page paid that cost
+even for someone who never left the Issues tab. Now fetched when its tab is
+first opened.
+
+**My lazy-fetch guard then stranded the next repository.** `loadingCode` was
+never reset on repo change, so a request still in flight for the previous repo
+left it `true`, and `if (loadingCode) return` blocked the new fetch
+**permanently** — the panel sat on "Reading source..." for a request that would
+never be made, while the API answered that same call in 0.2s. Both this and
+stale-response bleed are now keyed on `owner/repo`. Lesson: a guard flag not
+reset on the dimension it guards is a deadlock waiting to happen.
+
+**A fixed `minDegree` default did not scale.** 2 is right for a 250-symbol
+project; on yt-dlp it still left 471 nodes and 1064 edges. The initial floor is
+now chosen from the payload (raised until under ~320 nodes): yt-dlp opens at 3,
+express and Doombot at 2.
+
+**The filter set was thinner than the reference and I had not noticed** until
+the user pointed it out. `main`'s graph has Subsystem / Runtime / Min
+connections / Show all; this page had only two of those. Runtime now renders
+only when the dimension varies — every symbol in express is `shared`, so a
+one-option control there is noise. "Show all" matters more than it looks: the
+initial floor is auto-chosen, so without an explicit reset to 0 the unfiltered
+graph was unreachable from the UI.
+
+**The hover tooltip actively defeated the hover.** `nodeLabel` produces a
+floating black box tracking the cursor directly over the neighbourhood the
+hover exists to reveal. Removed from both graphs; the information moved to the
+click panel (code) and the caption line (issues).
+
+**Two tooling notes that cost real time.** Heredoc-quoted Python mangles `\n`
+inside string literals — it became a real newline three separate times and broke
+the file each time; use the Edit tool or line-index replacement for anything
+containing escapes. And Git Bash rewrites a leading `/graphs` into
+`C:/Program Files/Git/graphs` in curl URLs; prefix with `MSYS_NO_PATHCONV=1`.
+
+## 6. The next step I would take
+
+**Split the two views out of `Graphs.tsx`.** At ~700 lines with two canvases,
+two filter sets, two painters and two focus models in one component, the next
+change to either half risks the other. `IssueRelationshipGraph` and
+`CodeStructureGraph` as siblings under a thin `Graphs` shell.
+
+Then, in rough order of value:
+
+1. **Decide whether this branch merges to `main` at all.** It duplicates
+   `rag/graph.py` and the graph schemas that already exist on `main`, on a
+   diverged history. Someone has to choose which dashboard ships — this one or
+   `main`'s — because maintaining both is the real cost here, not the graphs.
+2. **The `RepoGuardian` / `Doombot` naming split** is now visible on `main` too
+   (the Chrome extension is `repoguardian-lens`). A judge will notice two
+   product names. Worth settling before the demo.
+3. **`psf/black` takes ~44s cold** on the code graph — 60 files, one request
+   each. Bounded and cached, but a demo that opens the Code tab on an unvisited
+   large repo will wait. Pre-warm whatever you plan to show.
+4. **This branch has no pytest suite** — `tests/` holds only `manual_*.py`
+   scripts, so none of the verification above is a test run. If this branch
+   survives, porting `tests/test_api_contract.py` from `main` would have caught
+   the `Evidence.score` bug immediately.
+
+## 7. Environment notes
+
+- API and dashboard were left **running**: `uvicorn api.main:app --port 8000`
+  (with `DEMO_MODE=1`, so no GitHub writes) and `npm run dev` on 5173.
+- **Keep `DEMO_MODE=1`.** Issue comments on public repos do not require push
+  access, so a `comment` or `close_duplicate` decision can genuinely post to a
+  real open-source project.
+- GitHub's quota was exhausted once this session (5000/hour, **per account, not
+  per token** — a new PAT on the same account does not help). The code-graph fix
+  removed the main drain; onboarding a large repo is still the expensive
+  operation.
+- `main` picked up substantial work this session that is *not* on this branch:
+  F17 adaptive repository learning, F18 the MCP intelligence layer, the
+  code-graph performance fix, and tanay's Chrome extension. If this branch is
+  ever rebased, expect those to be the interesting conflicts.
+
+---
+*Appended 2026-08-21. Everything above the second `---` divider is a different
+session on a different branch and was not modified.*
