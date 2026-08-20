@@ -7,7 +7,9 @@ import type {
   CreateInvestigationRequest,
   FeedbackRequest,
   BriefResponse,
+  CodeGraphResponse,
   IndexJobResponse,
+  IssueGraphResponse,
 } from "./types";
 import {
   mockRepos,
@@ -16,6 +18,8 @@ import {
   mockInvestigationDetail,
   mockEscalations,
   mockBrief,
+  mockCodeGraph,
+  mockIssueGraph,
 } from "./mocks";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
@@ -93,4 +97,25 @@ export function postFeedback(req: FeedbackRequest): Promise<{ ok: boolean }> {
 export function getBrief(owner: string, repo: string): Promise<BriefResponse> {
   if (USE_MOCKS) return delay().then(() => mockBrief);
   return request(`/api/brief/${owner}/${repo}`);
+}
+
+export function getIssueGraph(
+  owner: string,
+  repo: string,
+): Promise<IssueGraphResponse> {
+  if (USE_MOCKS) return delay().then(() => mockIssueGraph);
+  return request(`/api/repos/${owner}/${repo}/graph`);
+}
+
+export function getCodeGraph(
+  owner: string,
+  repo: string,
+  changedPaths: string[] = [],
+): Promise<CodeGraphResponse> {
+  if (USE_MOCKS) return delay().then(() => mockCodeGraph);
+  const params = new URLSearchParams();
+  for (const path of changedPaths) params.append("changed_path", path);
+  const encoded = params.toString();
+  const query = encoded ? `?${encoded}` : "";
+  return request(`/api/repos/${owner}/${repo}/code-graph${query}`);
 }
