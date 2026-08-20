@@ -80,6 +80,9 @@ export function Graphs() {
   const [codeGraph, setCodeGraph] = useState<CodeGraphResponseApi | null>(null);
   const [issueError, setIssueError] = useState<string | null>(null);
   const [codeError, setCodeError] = useState<string | null>(null);
+  /** Real state, not derived: the code graph is fetched on demand, so "not
+   *  loaded yet" and "loading now" are different things to show. */
+  const [loadingCode, setLoadingCode] = useState(false);
 
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [selectedLink, setSelectedLink] = useState<IssueGraphLinkApi | null>(null);
@@ -96,17 +99,56 @@ export function Graphs() {
     setIssueError(null);
     setCodeError(null);
     setSelectedLink(null);
+    setSubsystem("");
 
     if (!owner || !repo) return;
 
     getIssueGraph(owner, repo)
       .then(setIssueGraph)
       .catch(() => setIssueError("Could not load the issue graph. Index the repository first."));
+  }, [owner, repo]);
 
+  /**
+   * The code graph is fetched only once its tab is opened.
+   *
+   * It reads every source file in the repository -- one GitHub request each --
+   * and measured 43s on yt-dlp. Fetching it alongside the issue graph meant
+   * simply opening this page paid that cost even for someone who never left
+   * the Issues tab. Requested on demand, and only once per repository.
+   */
+  useEffect(() => {
+    if (view !== "code" || !owner || !repo) return;
+    if (codeGraph !== null || codeError !== null || loadingCode) return;
+
+    setLoadingCode(true);
     getCodeGraph(owner, repo)
       .then(setCodeGraph)
-      .catch(() => setCodeError("Could not read the repository's source files."));
-  }, [owner, repo]);
+      .catch(() => setCodeError("Could not read this repository's source files."))
+      .finally(() => setLoadingCode(false));
+  }, [view, owner, repo, codeGraph, codeError, loadingCode]);
+
+  /**
+   * Start the filter where the graph is legible for *this* repository.
+   *
+   * A fixed default cannot serve both: 2 is right for a 250-symbol project and
+   * useless on yt-dlp, where it still leaves 471 nodes and 1064 edges. Raise
+   * the floor until the first render is readable; the slider then goes wherever
+   * the reader wants from there.
+   */
+  useEffect(() => {
+    if (!codeGraph) return;
+    const nodes = codeGraph.nodes;
+    for (const floor of [2, 3, 5, 8]) {
+      const kept = nodes.filter(
+        (n) => n.in_degree + n.out_degree >= floor
+      ).length;
+      if (kept <= 320) {
+        setMinDegree(floor);
+        return;
+      }
+    }
+    setMinDegree(8);
+  }, [codeGraph]);
 
   // ---- issue graph -------------------------------------------------------
 
@@ -270,7 +312,6 @@ export function Graphs() {
   }
 
   const loadingIssues = issueGraph === null && issueError === null;
-  const loadingCode = codeGraph === null && codeError === null;
 
   return (
     <div className="flex flex-col gap-8">
@@ -445,9 +486,22 @@ export function Graphs() {
 
           <div className="h-[520px] overflow-hidden rounded-2xl border border-border bg-card shadow-flat">
             {loadingCode ? (
-              <p className="p-6 text-sm text-muted">Parsing the repository…</p>
+              // Naming the reason for the wait. This reads every source file
+              // over the network -- measured at 43s on a large repository --
+              // and an unexplained blank panel for that long reads as broken.
+              <div className="p-6">
+                <p className="text-sm font-bold text-ink">
+                  Reading {repoName}'s source…
+                </p>
+                <p className="mt-1 text-sm text-muted">
+                  Each file is a separate request, so this can take up to a
+                  minute on a large repository. It is cached afterwards.
+                </p>
+              </div>
             ) : codeError ? (
               <p className="p-6 text-sm text-muted">{codeError}</p>
+            ) : codeGraph === null ? (
+              <p className="p-6 text-sm text-muted">Opening the code graph…</p>
             ) : codeData.nodes.length === 0 ? (
               <p className="p-6 text-sm text-muted">
                 Nothing to show at this filter — lower “min connections”.
