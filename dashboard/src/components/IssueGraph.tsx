@@ -132,11 +132,70 @@ const ALL_CATEGORIES: GraphCategory[] = [
  * an edge reports the reason it exists.
  */
 export function IssueGraph(props: IssueGraphProps) {
-  if (props.codeGraph) {
+  const hasIssues = (props.nodes?.length ?? 0) > 0
+  const hasCode = Boolean(props.codeGraph)
+
+  // Default to whichever view has data, preferring issue relationships --
+  // that is the F15 headline, and the code graph is the supporting view.
+  const [view, setView] = useState<'issues' | 'code'>(
+    hasIssues ? 'issues' : 'code',
+  )
+
+  // Previously `if (props.codeGraph)` returned early, so passing both data
+  // sets rendered only the code graph and the issue-relationship view was
+  // unreachable -- built, served by the API, and never seen. When both are
+  // present they are now switchable rather than one silently winning.
+  if (hasIssues && hasCode) {
+    return (
+      <div className={cn('flex flex-col gap-3', props.className)}>
+        <div
+          aria-label="Graph view"
+          className="flex items-center gap-1 self-start rounded-lg border border-border bg-surface p-1"
+          role="tablist"
+        >
+          <Button
+            aria-selected={view === 'issues'}
+            onClick={() => setView('issues')}
+            role="tab"
+            size="sm"
+            variant={view === 'issues' ? 'secondary' : 'ghost'}
+          >
+            <Network aria-hidden="true" className="size-4" />
+            Issue relationships
+          </Button>
+          <Button
+            aria-selected={view === 'code'}
+            onClick={() => setView('code')}
+            role="tab"
+            size="sm"
+            variant={view === 'code' ? 'secondary' : 'ghost'}
+          >
+            <Code2 aria-hidden="true" className="size-4" />
+            Code structure
+          </Button>
+        </div>
+
+        {view === 'issues' ? (
+          <IssueRelationshipGraph
+            links={props.links ?? []}
+            nodes={props.nodes ?? []}
+            onSelectIssue={props.onSelectIssue}
+          />
+        ) : (
+          <CodeGraphExplorer
+            graph={props.codeGraph!}
+            onSelectCode={props.onSelectCode}
+          />
+        )}
+      </div>
+    )
+  }
+
+  if (hasCode) {
     return (
       <CodeGraphExplorer
         className={props.className}
-        graph={props.codeGraph}
+        graph={props.codeGraph!}
         onSelectCode={props.onSelectCode}
       />
     )

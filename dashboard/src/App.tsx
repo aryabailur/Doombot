@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import {
   BrowserRouter,
   Navigate,
@@ -35,6 +35,7 @@ import { SkeletonState } from '@/components/SkeletonState'
 import {
   getInvestigation,
   getCodeGraph,
+  getIssueGraph,
   getRepoHealth,
   getRepos,
   indexRepo,
@@ -45,7 +46,7 @@ import {
 } from '@/lib/api'
 import type { Escalation, HealthResponse } from '@/lib/types'
 import { useApiData } from '@/lib/useApiData'
-import { useSocket } from '@/lib/useSocket'
+import { useSocket, type WsEnvelope } from '@/lib/useSocket'
 
 /** Split "owner/repo" for the path-segmented endpoints. */
 function splitRepo(full: string): [string, string] {
@@ -307,21 +308,62 @@ function InvestigationDetailPage() {
  * impact overlay has something to show immediately instead of a neutral
  * graph nobody can interpret.
  */
+/**
+ * The graph screen, fed by both graph endpoints and refreshed live.
+ *
+ * Two fixes are folded in here. First, this only ever passed `codeGraph`, so
+ * the issue-relationship half of F15 was built, served, and never rendered --
+ * the screen showed code structure while the issue graph the endpoint returns
+ * went unused.
+ *
+ * Second, it was fetch-once. An investigation completing is exactly what
+ * changes this graph -- a node's category flips, a duplicate edge appears --
+ * so both halves reload on `investigation.completed`. That is the difference
+ * between a diagram and a live view: a judge watching a scan finish sees the
+ * graph react instead of having to reload the page.
+ */
 function GraphPage({ repoName }: { repoName: string }) {
   const [owner, repo] = splitRepo(repoName)
   const changedPaths =
     repoName.toLowerCase() === 'aryabailur/doombot' ? ['rag/graph.py'] : []
 
-  const graph = useApiData(() => getCodeGraph(owner, repo, changedPaths), {})
+  const issues = useApiData(() => getIssueGraph(owner, repo), {})
+  const code = useApiData(() => getCodeGraph(owner, repo, changedPaths), {})
 
-  if (graph.error && !graph.data) {
-    return <ErrorState kind={graph.error} onRetry={graph.reload} />
+  // Reload is identity-stable per fetch, so this only re-subscribes when the
+  // repository changes -- not on every render.
+  const reloadIssues = issues.reload
+  const reloadCode = code.reload
+
+  useSocket({
+    url: WS_URL,
+    onEvent: useCallback(
+      (envelope: WsEnvelope) => {
+        if (envelope.type === 'investigation.completed') {
+          reloadIssues()
+          reloadCode()
+        }
+      },
+      [reloadIssues, reloadCode],
+    ),
+  })
+
+  // Only a hard failure with nothing cached is worth blanking the screen for:
+  // if one half loaded, render it rather than hiding both.
+  if (issues.error && code.error && !issues.data && !code.data) {
+    return <ErrorState kind={issues.error} onRetry={reloadIssues} />
   }
-  if (!graph.data) {
+  if (!issues.data && !code.data) {
     return <SkeletonState className="min-h-[560px]" variant="card" />
   }
 
-  return <IssueGraph codeGraph={graph.data} />
+  return (
+    <IssueGraph
+      codeGraph={code.data ?? undefined}
+      links={issues.data?.links}
+      nodes={issues.data?.nodes}
+    />
+  )
 }
 
 function HealthPage({ repoName }: { repoName: string }) {
