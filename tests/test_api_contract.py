@@ -293,3 +293,54 @@ def test_frontend_mirror_matches_documented_shapes():
             f"missing {sorted(set(spec) - ts_fields)}, "
             f"extra {sorted(ts_fields - set(spec))}"
         )
+
+
+# --- WebSocket ---------------------------------------------------------------
+
+
+def test_websocket_envelope_and_step_shape():
+    """Live events must be {type, data} with a full StepRecord inside.
+
+    This coupling has already broken once: agents/chain.py emitted
+    {type, step} while the contract and Stream C's useSocket guard both
+    require {type, data}, so the dashboard silently dropped every event while
+    the backend looked healthy. tests/test_chain.py locks the emitter side;
+    this locks what actually arrives over the wire.
+
+    Requires an investigation to be running, so it skips unless one produces
+    events within the timeout.
+    """
+    _require_api()
+    try:
+        import asyncio
+
+        import websockets
+    except ImportError:  # pragma: no cover
+        pytest.skip("websockets not installed")
+
+    ws_url = BASE_URL.replace("http://", "ws://").replace("https://", "wss://") + "/ws"
+
+    async def collect() -> list[dict]:
+        received: list[dict] = []
+        try:
+            async with websockets.connect(ws_url, open_timeout=3) as socket:
+                while len(received) < 4:
+                    raw = await asyncio.wait_for(socket.recv(), timeout=4)
+                    received.append(json.loads(raw))
+        except Exception:
+            pass
+        return received
+
+    events = asyncio.run(collect())
+    if not events:
+        pytest.skip("no WebSocket events observed (no investigation running)")
+
+    for index, event in enumerate(events):
+        assert set(event) == {"type", "data"}, (
+            f"event[{index}]: envelope must be exactly {{type, data}}, got "
+            f"{sorted(event)} -- Stream C's useSocket drops anything else"
+        )
+        assert event["type"] in WS_EVENT_TYPES, f"unknown type {event['type']!r}"
+
+        if event["type"].startswith("step."):
+            assert_shape(event["data"], STEP_RECORD, f"event[{index}].data")
