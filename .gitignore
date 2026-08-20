@@ -7,7 +7,8 @@ venv/
 
 # Local data stores
 chroma_db/
-chroma_*/          # scratch indexes from local test runs
+# scratch indexes from local test runs
+chroma_*/
 *.db
 *.db-wal
 *.db-shm
@@ -16,5 +17,6 @@ chroma_*/          # scratch indexes from local test runs
 node_modules/
 dist/
 .vite/
-vscode-extension/out/    # compiled extension output
+# compiled extension output (tsc)
+vscode-extension/out/
 *.vsix
