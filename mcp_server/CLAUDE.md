@@ -170,34 +170,64 @@ from `tool_names.py` (`GET_ISSUE`, `GET_ISSUES`, `POST_ISSUE_COMMENT`,
 
 ---
 
-## 5. Known issue: fresh `Github(token)` per call
+## 4b. F18 — the intelligence layer (not built)
 
-Every function in `github_client.py` currently does `Github(github_token)`
-inline. That's a new HTTP client (and, depending on PyGithub version, a
-fresh connection pool) built on every single call, including the loop in
-`get_repo_files` and every review comment. Under load — or during a
-demo where the agent chains 5+ calls per investigation — this is wasted
-setup cost for no benefit, since the token doesn't change.
+Every tool registered today is a GitHub **passthrough**: `get_issue_mcp`,
+`post_issue_comment_mcp`, `add_labels_mcp`. They expose GitHub *to Doombot*.
+Nothing exposes Doombot's own analysis to anything else.
 
-**Fix:** cache a module-level client and reuse it:
+F18 adds a second class of tool — `search_issues_mcp`, `find_duplicates_mcp`,
+`get_escalations_mcp`, `get_health_score_mcp`, `get_investigation_mcp`,
+`get_issue_graph_mcp`, `get_weekly_brief_mcp` — making the protocol
+bidirectional. Full spec, including the table of backing modules, is in
+`docs/INTELLIGENCE.md`.
+
+Two constraints worth stating here, where the tools live:
+
+- **Read-only, without exception.** No intelligence tool may post, label, or
+  close. Writes stay behind the decider's approval gates; an external MCP
+  client must not be able to route around a maintainer.
+- **`get_health_score_mcp` must pass through `measured` and `unreadable`.**
+  Three of the four sub-scores return 100 for an empty backlog, so a bare score
+  claims perfect health for a repository nothing has been read from. A client
+  has even less context to catch that than a human reading a dashboard.
+
+Names go in `tool_names.py` like everything else (§2).
+
+---
+
+## 5. The shared client — resolved, and why it is configured as it is
+
+This section previously described a fresh `Github(github_token)` per call as an
+open problem. It is fixed: there are no inline constructions left, and the dead
+`from github import Auth` is gone. `_get_client()` caches one module-level
+client.
+
+What matters now is **how** it is configured, because the defaults are actively
+harmful for anything with a user waiting:
 
 ```python
-_client: Github | None = None
-
-def _get_client() -> Github:
-    global _client
-    if _client is None:
-        _client = Github(github_token)
-    return _client
+Github(
+    github_token,
+    retry=Retry(total=2, backoff_factor=0.4,
+                status_forcelist=[500, 502, 503, 504]),
+    per_page=100,
+    timeout=20,
+)
 ```
 
-Then replace every `g = Github(github_token)` call site with
-`g = _get_client()`. `git_initialization` should do the same.
+- **A plain `urllib3.Retry`, not PyGithub's `GithubRetry`.** On a 403 rate
+  limit `GithubRetry` *sleeps inside the call* until the quota window resets.
+  Observed: `Setting next backoff to 1524.97s` — a 25-minute sleep with the
+  request still open, which made adding a repository appear to hang forever and
+  logged nothing, because uvicorn logs on completion. A plain retry keeps the
+  useful part (a couple of attempts at transient 5xx) and lets a rate limit
+  raise in ~0.5s so the caller can report it.
+- **`per_page=100`, not the default 30.** Request count is what exhausts the
+  5000/hour quota, and the default triples it for identical data.
 
-Also: `from github import Auth` is imported at the top of `github_client.py`
-and **never used**. Remove it as part of this same cleanup — dead imports
-are exactly the kind of thing that looks intentional to the next person who
-touches the file and isn't.
+Callers should surface `RateLimitExceededException` as a 429 with the reset
+time. Retrying it silently is how a demo dies.
 
 ---
 

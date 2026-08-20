@@ -12,6 +12,7 @@ the GitHub-facing MCP tools.
 | [../rag/CLAUDE.md](../rag/CLAUDE.md) | Indexing, retrieval, duplicate detection |
 | [../mcp_server/CLAUDE.md](../mcp_server/CLAUDE.md) | MCP tools and the GitHub client |
 | [../docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) | How the pieces fit and why |
+| [../docs/INTELLIGENCE.md](../docs/INTELLIGENCE.md) | F17/F18 specs — both Stream B, neither built |
 
 ## You own
 
@@ -109,6 +110,8 @@ issue-relationship graph (F15) and the semantic code graph.
 | Approval-gated labeling (F08) | Live — `ADD_LABELS`, gated |
 | Issue + code graph (F15) | Live |
 | Resolution proposals (F16) | Live — approval-gated |
+| Adaptive repository learning (F17) | **Not built** — spec in `docs/INTELLIGENCE.md` |
+| MCP intelligence layer (F18) | **Not built** — spec in `docs/INTELLIGENCE.md` |
 
 **There is no OpenAI in this project.** Groq `openai/gpt-oss-120b` for
 inference, local MiniLM for embeddings. No `openai` package, no

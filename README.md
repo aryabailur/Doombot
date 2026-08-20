@@ -51,6 +51,8 @@ README says what is actually done.
 | VS Code extension | F14 | P2 | Implemented |
 | Issue relationship graph | F15 | Stretch | Implemented — live from `rag.graph` |
 | Intelligent issue resolution | F16 | Stretch | Implemented — approval-gated |
+| Adaptive repository learning | F17 | Stretch | Planned — retrieval exists, few-shot prompt does not |
+| MCP intelligence layer | F18 | Stretch | Planned — 9 GitHub tools exist, none expose Doombot's analysis |
 
 **Working today:** the issue-triage graph (`issue_fetcher → duplicate_detector
 → resolver → security_scanner → impact_scorer → labeler → decider`), the
@@ -58,7 +60,8 @@ PR-review graph (`fetcher → reviewer → test_writer → summarizer`), a FastM
 stdio server over PyGithub, Chroma + MiniLM indexing, all 13 REST endpoints
 plus `/ws`, and the dashboard reading every screen from the API.
 
-**Known gap:** F09 (incomplete-issue follow-up) is not built.
+**Known gaps:** F09 (incomplete-issue follow-up), F17 and F18 are specified but
+not built — see [docs/INTELLIGENCE.md](docs/INTELLIGENCE.md) for F17/F18.
 
 ---
 
@@ -77,6 +80,7 @@ Read in this order. **Agents: `CLAUDE.md` first, always.**
 | [docs/FEATURES.md](docs/FEATURES.md) | Feature → owner → branch mapping, cut list |
 | [docs/PLAN.md](docs/PLAN.md) | Hour-boxed schedule and demo script |
 | [STRETCH_FEATURES.md](STRETCH_FEATURES.md) | F15 and F16 specifications |
+| [docs/INTELLIGENCE.md](docs/INTELLIGENCE.md) | F17 adaptive learning, F18 MCP intelligence layer — specs, not yet built |
 | [TECHSTACK.md](TECHSTACK.md) | Dependencies, env vars, install |
 
 **Per-stream entry points** (what's done, what to watch out for):
