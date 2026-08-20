@@ -119,14 +119,21 @@ WS_EVENT_TYPES = {
 
 
 def _get(path: str):
-    """GET a path, or None when the API is unreachable."""
+    """GET a path. Returns (status, body); status is None if unreachable.
+
+    HTTPError is caught BEFORE URLError. HTTPError subclasses URLError, so
+    the broader clause first would swallow every 4xx/5xx into "unreachable"
+    and make status-code assertions silently unfalsifiable -- which is
+    exactly what happened here: test_unknown_investigation_returns_404 read
+    None from a server that was correctly returning 404.
+    """
     try:
         with urllib.request.urlopen(f"{BASE_URL}{path}", timeout=TIMEOUT) as response:
             return response.status, json.loads(response.read())
-    except (urllib.error.URLError, TimeoutError, ConnectionError):
-        return None, None
     except urllib.error.HTTPError as exc:
         return exc.code, None
+    except (urllib.error.URLError, TimeoutError, ConnectionError):
+        return None, None
 
 
 _api_up: bool | None = None
