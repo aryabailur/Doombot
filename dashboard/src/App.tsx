@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   BrowserRouter,
   Navigate,
@@ -16,11 +16,13 @@ import {
   type EscalationRow,
 } from '@/components/EscalationTable'
 import { EscalationPreview } from '@/components/EscalationPreview'
+import { ErrorState } from '@/components/ErrorState'
 import { HealthMetricBreakdown } from '@/components/HealthMetricBreakdown'
 import { HealthScoreCard } from '@/components/HealthScoreCard'
 import { HealthTrendChart } from '@/components/HealthTrendChart'
 import { InvestigationList } from '@/components/InvestigationList'
 import { IssueGraph } from '@/components/IssueGraph'
+import { SkeletonState } from '@/components/SkeletonState'
 import {
   RepositorySelector,
   type RepoSummary,
@@ -29,12 +31,12 @@ import {
   demoActivity,
   demoEscalations,
   demoHealthComponents,
-  demoGraphLinks,
-  demoGraphNodes,
   demoHealthTrend,
   demoRepos,
 } from '@/demo/demoData'
+import { getCodeGraph } from '@/lib/api'
 import { mockInvestigations } from '@/lib/mocks'
+import type { CodeGraphResponse } from '@/lib/types'
 
 /**
  * Shared app state.
@@ -173,14 +175,69 @@ function HealthPage({ state }: { state: AppState }) {
 }
 
 
-function GraphPage() {
-  const navigate = useNavigate()
+function GraphPage({ state }: { state: AppState }) {
+  const [graph, setGraph] = useState<CodeGraphResponse | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [reload, setReload] = useState(0)
+
+  useEffect(() => {
+    let active = true
+    const [owner, repo] = state.selectedRepo.repo_name.split('/', 2)
+    setGraph(null)
+    setError(null)
+
+    if (!owner || !repo) {
+      setError('The selected repository name must use the owner/repository format.')
+      return () => {
+        active = false
+      }
+    }
+
+    // Doombot's own graph page opens on the RAG graph engine as the changed
+    // surface. That gives the hackathon demo a meaningful blast-radius overlay
+    // immediately; other connected repositories open with a neutral graph.
+    const changedPaths =
+      state.selectedRepo.repo_name.toLowerCase() === 'aryabailur/doombot'
+        ? ['rag/graph.py']
+        : []
+
+    void getCodeGraph(owner, repo, changedPaths)
+      .then((response) => {
+        if (active) {
+          setGraph(response)
+        }
+      })
+      .catch((reason: unknown) => {
+        if (active) {
+          setError(
+            reason instanceof Error
+              ? reason.message
+              : 'The semantic graph request failed.',
+          )
+        }
+      })
+
+    return () => {
+      active = false
+    }
+  }, [reload, state.selectedRepo.repo_name])
+
+  if (error) {
+    return (
+      <ErrorState
+        kind="network"
+        message={error}
+        onRetry={() => setReload((value) => value + 1)}
+      />
+    )
+  }
+
+  if (!graph) {
+    return <SkeletonState className="min-h-[560px]" variant="card" />
+  }
+
   return (
-    <IssueGraph
-      links={demoGraphLinks}
-      nodes={demoGraphNodes}
-      onSelectIssue={(node) => navigate(`/investigations/issue-${node.number}`)}
-    />
+    <IssueGraph codeGraph={graph} />
   )
 }
 
@@ -249,7 +306,7 @@ export function App() {
           />
           <Route element={<InvestigationsPage />} path="/investigations" />
           <Route element={<InvestigationsPage />} path="/investigations/:id" />
-          <Route element={<GraphPage />} path="/graph" />
+          <Route element={<GraphPage state={state} />} path="/graph" />
           <Route element={<HealthPage state={state} />} path="/health" />
         </Routes>
       </AppShell>
