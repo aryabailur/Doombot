@@ -175,6 +175,35 @@ export type DemoState = {
   feedback: DecisionFeedback[]
 }
 
+/**
+ * One entry in the live agent activity feed.
+ *
+ * Flattened from the backend's four WebSocket envelope types so the UI renders
+ * one list rather than branching on transport shapes.
+ */
+export type AgentActivityEvent = {
+  id: string
+  kind: 'connection' | 'activity' | 'step' | 'decision'
+  message: string
+  timestamp: string
+  severity: 'info' | 'warning' | 'error'
+  repository?: string
+  investigationId?: string
+  state?: AgentRunState
+  durationMs?: number
+  /** True for a step that has started but not yet reported completion. */
+  running?: boolean
+}
+
+export type LensSettings = {
+  /** false = live GitHub analysis. Demo stays the default (spec section 40). */
+  demoMode: boolean
+  /** Optional PAT. Raises the rate limit; never bundled (spec section 42). */
+  githubToken?: string
+  /** Optional RepoGuardian backend origin, e.g. http://localhost:8000. */
+  backendUrl?: string
+}
+
 export type ExtensionMessage =
   | { type: 'GET_REPOSITORY_CONTEXT'; owner: string; repo: string }
   | { type: 'GET_ISSUE_INSIGHT'; owner: string; repo: string; issueNumber: number }
@@ -187,11 +216,19 @@ export type ExtensionMessage =
   | { type: 'GET_HEALTH'; owner: string; repo: string }
   | { type: 'APPROVE_ACTION'; action: ApprovalAction; approved: boolean }
   | { type: 'RECORD_FEEDBACK'; feedback: DecisionFeedback }
+  | { type: 'GET_AGENT_ACTIVITY' }
+  | { type: 'GET_SETTINGS' }
+  | { type: 'SET_SETTINGS'; settings: Partial<LensSettings> }
   | { type: 'RESET_DEMO' }
   | { type: 'TOGGLE_LENS' }
 
 export type ExtensionResponse<T> =
-  | { ok: true; data: T }
+  /**
+   * `degraded` marks a live request that fell back to seeded data; `notice`
+   * carries the reason so the panel can say so rather than pass demo results
+   * off as live ones.
+   */
+  | { ok: true; data: T; degraded?: boolean; notice?: string }
   | { ok: false; error: string; recoverable: boolean }
 
-export type LensView = 'overview' | 'investigation' | 'memory' | 'ask' | 'pr'
+export type LensView = 'overview' | 'investigation' | 'memory' | 'agent' | 'ask' | 'pr'

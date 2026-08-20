@@ -1,5 +1,4 @@
 import type {
-  AgentEvent,
   DuplicateResult,
   GroundedAnswer,
   Investigation,
@@ -8,6 +7,7 @@ import type {
 
 import type { AgentEngine, IssueInput, PullRequestInput, QuestionInput } from './AgentEngine'
 import { decideIssue } from './decisions'
+import { buildAgentEvents } from './events'
 import { fixedEvidence, searchRepositoryMemory } from './retrieval'
 import {
   DEMO_ACTIVITY,
@@ -31,37 +31,6 @@ function issueFor(number: number) {
   )
 }
 
-function buildEvents(investigation: Omit<Investigation, 'events'>): AgentEvent[] {
-  const { issue, insight, runId } = investigation
-  const startedAt = Date.now()
-  const event = (
-    index: number,
-    state: AgentEvent['state'],
-    title: string,
-    detail: string,
-    sources?: AgentEvent['sources'],
-  ): AgentEvent => ({
-    id: `${runId}-${index}`,
-    runId,
-    state,
-    title,
-    detail,
-    sources,
-    timestamp: new Date(startedAt + index * 450).toISOString(),
-  })
-
-  return [
-    event(0, 'queued', 'Investigation queued', `Prepared deterministic run for #${issue.number}.`),
-    event(1, 'reading', 'Read issue', `Extracted ${issue.subsystem} subsystem and ${issue.symptoms.length} symptoms.`),
-    event(2, 'retrieving', 'Searched project history', `Retrieved ${insight.evidence.length} ranked evidence items.`, insight.evidence),
-    event(3, 'comparing', 'Compared historical cases', 'Compared symptoms, labels, subsystem, and known relationships.', insight.evidence),
-    event(4, 'checking_precedent', 'Checked maintainer precedent', 'Looked for earlier decisions and linked fixes.', insight.evidence.filter((source) => source.type === 'pull_request' || source.type === 'decision')),
-    event(5, 'assessing_impact', 'Assessed repository impact', `${issue.subsystem} impact evaluated against repository history.`),
-    event(6, 'deciding', 'Recorded agent decision', `${insight.title} with ${Math.round(insight.confidence * 100)}% confidence.`, insight.evidence),
-    event(7, 'completed', 'Investigation complete', insight.suggestedAction, insight.evidence),
-  ]
-}
-
 export class MockAgentEngine implements AgentEngine {
   async getRepositoryContext() {
     return DEMO_REPOSITORY
@@ -80,7 +49,7 @@ export class MockAgentEngine implements AgentEngine {
       insight,
       approval,
     }
-    return { ...partial, events: buildEvents(partial) }
+    return { ...partial, events: buildAgentEvents(partial) }
   }
 
   async reviewPullRequest(input: PullRequestInput): Promise<PRReview> {

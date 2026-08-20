@@ -1,0 +1,155 @@
+/**
+ * Options-page styling.
+ *
+ * lens.css scopes its tokens to :host, which only resolves inside the content
+ * script's shadow root. This is an ordinary document, so the same palette is
+ * redeclared on :root -- same values, deliberately duplicated rather than
+ * loosening the shadow scoping the panel depends on.
+ */
+
+:root {
+  --lens-canvas: #07090d;
+  --lens-surface: #0c1118;
+  --lens-raised: #111923;
+  --lens-border: #26313d;
+  --lens-text: #f5f7fa;
+  --lens-secondary: #c4cdd7;
+  --lens-muted: #8a96a3;
+  --lens-primary: #8b5cf6;
+  --lens-success: #34d399;
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background: var(--lens-canvas);
+  color: var(--lens-text);
+  font-family: Inter, system-ui, -apple-system, sans-serif;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.rg-opt {
+  max-width: 620px;
+  margin: 0 auto;
+  padding: 40px 28px 64px;
+}
+
+.rg-opt h1 {
+  font-size: 15px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin: 0 0 4px;
+}
+
+.rg-opt h1 span {
+  color: var(--lens-primary);
+}
+
+.rg-opt h2 {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--lens-muted);
+  margin: 0 0 8px;
+}
+
+.rg-opt section {
+  margin-top: 30px;
+  padding-top: 22px;
+  border-top: 1px solid var(--lens-border);
+}
+
+.rg-opt-note {
+  color: var(--lens-muted);
+  margin: 0 0 12px;
+}
+
+.rg-opt-note code {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  color: var(--lens-secondary);
+}
+
+.rg-opt-optional {
+  color: var(--lens-dim, #5f6b78);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+}
+
+.rg-opt-modes {
+  display: grid;
+  gap: 10px;
+}
+
+.rg-opt-modes button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 13px 15px;
+  background: var(--lens-surface);
+  border: 1px solid var(--lens-border);
+  border-radius: 8px;
+  color: var(--lens-text);
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 150ms ease, background 150ms ease;
+}
+
+.rg-opt-modes button:hover {
+  border-color: color-mix(in srgb, var(--lens-primary) 45%, var(--lens-border));
+}
+
+.rg-opt-modes button.is-active {
+  border-color: var(--lens-primary);
+  background: color-mix(in srgb, var(--lens-primary) 10%, var(--lens-surface));
+}
+
+.rg-opt-modes strong {
+  display: block;
+  font-size: 12px;
+  margin-bottom: 2px;
+}
+
+.rg-opt-modes span {
+  color: var(--lens-muted);
+  font-size: 11.5px;
+}
+
+.rg-opt-input {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--lens-raised);
+  border: 1px solid var(--lens-border);
+  border-radius: 7px;
+  color: var(--lens-text);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 12px;
+}
+
+.rg-opt-input:focus-visible,
+.rg-opt-modes button:focus-visible {
+  outline: 2px solid var(--lens-primary);
+  outline-offset: 2px;
+}
+
+.rg-opt-saved {
+  min-height: 18px;
+  margin-top: 22px;
+  color: var(--lens-success);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rg-opt-modes button {
+    transition: none;
+  }
+}
+
+/* Distinguishes a stored value from an empty optional field. */
+.rg-opt-set {
+  color: var(--lens-success);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}

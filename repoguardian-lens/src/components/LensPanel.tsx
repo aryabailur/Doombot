@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useMemo, useState } from 'react'
+import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import {
   AlertTriangle,
@@ -17,7 +17,8 @@ import {
 
 import { openExternal, repositoryUrl } from '@/lib/format'
 import type { GitHubContext, LensView } from '@/lib/types'
-import { useLensStore } from '@/store/useLensStore'
+import { analyzeRepository, useLensStore } from '@/store/useLensStore'
+import { AgentFeed } from './AgentFeed'
 import { AgentPill } from './AgentPill'
 import { AgentRunTimeline } from './AgentRunTimeline'
 import { ApprovalTray } from './ApprovalTray'
@@ -30,6 +31,7 @@ import { FollowUpCard } from './FollowUpCard'
 import { HealthSnapshot } from './HealthSnapshot'
 import { PRRiskCard } from './PRRiskCard'
 import { RepositoryMemory } from './RepositoryMemory'
+import type { HealthReport, RepositoryMemory as RepositoryMemoryData } from '@/lib/types'
 
 function ContextLabel({ context }: { context: GitHubContext }) {
   if (context.type === 'unknown') return <span>Global GitHub context</span>
@@ -37,35 +39,121 @@ function ContextLabel({ context }: { context: GitHubContext }) {
   return <span><strong>{context.owner}/{context.repo}</strong>{suffix}</span>
 }
 
-function StoryLoading({ label }: { label: string }) {
+function StoryLoading({ label, demoMode }: { label: string; demoMode: boolean }) {
+  // The loading state names the sources being ranked (spec section 38), so in
+  // live mode it must not recite the seeded ones.
   return (
     <div className="rg-story-loading" role="status">
       <span className="rg-loading-pulse" />
-      <div><strong>{label}</strong><p>#331 · #402 · PR #188 · #417</p><small>4 evidence items ranked</small></div>
+      <div>
+        <strong>{label}</strong>
+        {demoMode ? (
+          <>
+            <p>#331 · #402 · PR #188 · #417</p>
+            <small>4 evidence items ranked</small>
+          </>
+        ) : (
+          <>
+            <p>Reading issues, labels, and pull requests</p>
+            <small>Ranking repository history</small>
+          </>
+        )}
+      </div>
     </div>
   )
 }
 
-function RepositoryXRay() {
-  const [url, setUrl] = useState('https://github.com/acme/payments-api')
+function RepositoryXRay({ demoMode, context }: { demoMode: boolean; context: GitHubContext }) {
+  const [url, setUrl] = useState(() =>
+    // Prefill the repository on screen; offering the demo repo in live mode
+    // invites analysing a repository that does not exist.
+    demoMode || context.type === 'unknown'
+      ? 'https://github.com/acme/payments-api'
+      : `https://github.com/${context.owner}/${context.repo}`,
+  )
   const [stage, setStage] = useState<'idle' | 'analyzing' | 'complete'>('idle')
+  const [result, setResult] = useState<{ health: HealthReport; memory: RepositoryMemoryData; name: string } | null>(null)
+  const [failure, setFailure] = useState<string | null>(null)
   const reduceMotion = useReducedMotion()
 
   const analyze = (event: FormEvent) => {
     event.preventDefault()
-    if (!/^https:\/\/github\.com\/[^/]+\/[^/]+\/?$/.test(url.trim())) return
+    const match = /^https:\/\/github\.com\/([^/]+)\/([^/]+?)\/?$/.exec(url.trim())
+    if (!match) return
     setStage('analyzing')
-    window.setTimeout(() => setStage('complete'), reduceMotion ? 0 : 950)
+    setFailure(null)
+
+    if (demoMode) {
+      // Seeded X-ray: deterministic and instant, as the demo requires.
+      setResult(null)
+      window.setTimeout(() => setStage('complete'), reduceMotion ? 0 : 950)
+      return
+    }
+
+    // Live: actually analyse the repository that was typed in, rather than
+    // showing a fixed score for whatever URL was entered.
+    const [, owner, repo] = match
+    void analyzeRepository(owner, repo)
+      .then((data) => {
+        setResult({ ...data, name: `${owner}/${repo}` })
+        setStage('complete')
+      })
+      .catch((error: unknown) => {
+        setFailure(error instanceof Error ? error.message : 'That repository could not be analyzed.')
+        setStage('idle')
+      })
   }
 
-  if (stage === 'complete') {
+  const reset = () => {
+    setStage('idle')
+    setResult(null)
+    setFailure(null)
+  }
+
+  if (stage === 'complete' && result) {
+    const hotspots = result.memory.groups.slice(0, 3)
+    return (
+      <section className="rg-section rg-xray-result">
+        <div className="rg-section-heading">
+          <div>
+            <span className="rg-eyebrow">Repository X-ray</span>
+            <h2>{hotspots.length > 0 ? `${hotspots.length} active area${hotspots.length === 1 ? '' : 's'}` : 'No grouped activity'}</h2>
+          </div>
+          <strong className="rg-health-score">{result.health.score}<span>/100</span></strong>
+        </div>
+        <div className="rg-hotspot-list">
+          {hotspots.map((group, index) => (
+            <span key={group.subsystem} className={index === 0 ? 'is-danger' : undefined}>
+              {group.subsystem}
+            </span>
+          ))}
+        </div>
+        <dl className="rg-change-list">
+          {result.health.metrics.slice(0, 3).map((metric) => (
+            <div key={metric.label}>
+              <dt>{metric.label}</dt>
+              <dd>{metric.value}</dd>
+            </div>
+          ))}
+        </dl>
+        <p className="rg-agent-take">{result.health.interpretation}</p>
+        <button className="rg-text-button" type="button" onClick={reset}>
+          <RotateCcw aria-hidden="true" size={13} /> Analyze another repository
+        </button>
+      </section>
+    )
+  }
+
+  // Seeded X-ray result. Demo only: in live mode a fixed 91/100 for an
+  // arbitrary repository would be a fabricated number.
+  if (stage === 'complete' && demoMode) {
     return (
       <section className="rg-section rg-xray-result">
         <div className="rg-section-heading"><div><span className="rg-eyebrow">Repository X-ray</span><h2>Three emerging hotspots</h2></div><strong className="rg-health-score">91<span>/100</span></strong></div>
         <div className="rg-hotspot-list"><span className="is-danger">Authentication</span><span>Routing</span><span>Database migrations</span></div>
         <dl className="rg-change-list"><div><dt>Contributor activity</dt><dd>↑ 14%</dd></div><div><dt>PR velocity</dt><dd>↑ 22%</dd></div><div><dt>Response time</dt><dd>↓ 8%</dd></div></dl>
         <p className="rg-agent-take">Authentication has the highest concentration of unresolved issues in the last 30 days.</p>
-        <button className="rg-text-button" type="button" onClick={() => setStage('idle')}><RotateCcw aria-hidden="true" size={13} /> Analyze another repository</button>
+        <button className="rg-text-button" type="button" onClick={reset}><RotateCcw aria-hidden="true" size={13} /> Analyze another repository</button>
       </section>
     )
   }
@@ -79,10 +167,11 @@ function RepositoryXRay() {
         <input id="rg-repository-url" type="url" value={url} onChange={(event) => setUrl(event.target.value)} required pattern="https://github\.com/[^/]+/[^/]+/?" />
         <button type="submit" disabled={stage === 'analyzing'}><ArrowRight aria-hidden="true" size={15} /></button>
       </form>
+      {failure && <p className="rg-inline-error" role="alert">{failure}</p>}
       {stage === 'analyzing' && (
         <div className="rg-analysis-progress" role="status">
-          <div><span>Building repository memory</span><strong>87%</strong></div>
-          <div className="rg-similarity-track"><span style={{ width: '87%' }} /></div>
+          <div><span>Building repository memory</span><strong>{demoMode ? '87%' : ''}</strong></div>
+          <div className="rg-similarity-track"><span style={{ width: demoMode ? '87%' : '100%' }} /></div>
           <p><Check aria-hidden="true" size={12} /> Structure · issues · pull requests · commits · decisions</p>
         </div>
       )}
@@ -95,6 +184,10 @@ export function LensPanel() {
   const {
     isOpen,
     demoMode,
+    agentEvents,
+    agentConnected,
+    backendConfigured,
+    refreshAgentFeed,
     context,
     view,
     status,
@@ -117,6 +210,7 @@ export function LensPanel() {
     loadMemory,
     loadDuplicates,
     ask,
+    notice,
     decideApproval,
     recordFeedback,
     resetDemo,
@@ -131,14 +225,28 @@ export function LensPanel() {
       { id: 'investigation', label: 'Investigate', visible: context.type === 'issue' },
       { id: 'pr', label: 'PR risk', visible: context.type === 'pull_request' },
       { id: 'memory', label: 'Memory', visible: true },
+      { id: 'agent', label: 'Agent', visible: true },
       { id: 'ask', label: 'Ask', visible: true },
     ],
     [context.type],
   )
 
-  const openDemoIssue = (number: number) => {
-    void initialize({ type: 'issue', owner: 'acme', repo: 'payments-api', issueNumber: number })
+  const openIssue = (number: number) => {
+    // In live mode the attention list holds real issues from the repository on
+    // screen; jumping to the demo repo would open the wrong one.
+    const coordinates =
+      demoMode || context.type === 'unknown'
+        ? { owner: 'acme', repo: 'payments-api' }
+        : { owner: context.owner, repo: context.repo }
+    void initialize({ type: 'issue', ...coordinates, issueNumber: number })
   }
+
+  useEffect(() => {
+    if (!isOpen || view !== 'agent') return
+    void refreshAgentFeed()
+    const timer = window.setInterval(() => void refreshAgentFeed(), 3000)
+    return () => window.clearInterval(timer)
+  }, [isOpen, view, refreshAgentFeed])
 
   const retry = () => void initialize(context)
   const markInvestigationComplete = useCallback(() => {
@@ -170,8 +278,12 @@ export function LensPanel() {
           </div>
 
           <div className="rg-mode-switch" aria-label="Data source">
-            <button type="button" className={!demoMode ? 'is-active' : ''} onClick={() => setDemoMode(false)}>Live GitHub</button>
-            <button type="button" className={demoMode ? 'is-active' : ''} onClick={() => setDemoMode(true)}><span aria-hidden="true">●</span> Demo repository</button>
+            <button type="button" className={!demoMode ? 'is-active' : ''} aria-pressed={!demoMode} onClick={() => setDemoMode(false)}>
+              {!demoMode && <span aria-hidden="true">●</span>} Live GitHub
+            </button>
+            <button type="button" className={demoMode ? 'is-active' : ''} aria-pressed={demoMode} onClick={() => setDemoMode(true)}>
+              {demoMode && <span aria-hidden="true">●</span>} Demo repository
+            </button>
           </div>
 
           <nav className="rg-tabs" aria-label="Lens views">
@@ -191,6 +303,19 @@ export function LensPanel() {
           </nav>
 
           <main className="rg-panel-body" tabIndex={-1}>
+            {notice && !error && (
+              <section className="rg-notice-state" role="status">
+                <AlertTriangle aria-hidden="true" size={17} />
+                <div>
+                  <strong>Showing demo data</strong>
+                  <p>{notice}</p>
+                  <div className="rg-action-row">
+                    <button className="rg-button" type="button" onClick={retry}>Retry live</button>
+                  </div>
+                </div>
+              </section>
+            )}
+
             {error && (
               <section className="rg-error-state" role="alert">
                 <AlertTriangle aria-hidden="true" size={19} />
@@ -198,7 +323,7 @@ export function LensPanel() {
               </section>
             )}
 
-            {loading && view !== 'ask' && <StoryLoading label={loading} />}
+            {loading && view !== 'ask' && <StoryLoading label={loading} demoMode={demoMode} />}
 
             {!loading && view === 'overview' && (
               <>
@@ -225,12 +350,12 @@ export function LensPanel() {
                     {activity && (
                       <section className="rg-section" aria-labelledby="attention-title">
                         <div className="rg-section-heading"><div><span className="rg-eyebrow">What matters</span><h2 id="attention-title">{activity.attentionCount} things need your attention</h2></div><span className="rg-auto-count">{activity.automatedCount} handled automatically</span></div>
-                        <div className="rg-attention-list">{activity.items.map((item) => <AttentionCard item={item} onOpen={openDemoIssue} key={item.issueNumber} />)}</div>
+                        <div className="rg-attention-list">{activity.items.map((item) => <AttentionCard item={item} onOpen={openIssue} key={item.issueNumber} />)}</div>
                       </section>
                     )}
                     {health && <HealthSnapshot report={health} />}
                     <div className="rg-wide-action"><button className="rg-button rg-button--primary" type="button" onClick={() => void loadMemory()}><Database aria-hidden="true" size={14} /> Explore project memory</button><button className="rg-button" type="button" onClick={() => { setView('ask'); void ask('What should I care about?') }}><Bot aria-hidden="true" size={14} /> What should I care about?</button></div>
-                    <RepositoryXRay />
+                    <RepositoryXRay demoMode={demoMode} context={context} />
                   </>
                 )}
               </>
@@ -258,11 +383,20 @@ export function LensPanel() {
               ) : <div className="rg-empty-state"><AlertTriangle aria-hidden="true" size={28} /><strong>PR context is unavailable</strong><p>Open a GitHub pull request to review repository-history-aware risk.</p></div>
             )}
 
-            {view === 'ask' && <AskAgent answer={answer} loading={Boolean(loading)} onAsk={(question) => void ask(question)} />}
+            {view === 'ask' && <AskAgent answer={answer} loading={Boolean(loading)} demoMode={demoMode} onAsk={(question) => void ask(question)} />}
             {!loading && view === 'memory' && (memory ? <RepositoryMemory memory={memory} /> : <div className="rg-empty-state"><Database aria-hidden="true" size={28} /><strong>Repository memory has not loaded</strong><p>Retrieve the deterministic project index to explore historical evidence.</p><button className="rg-button rg-button--primary" type="button" onClick={() => void loadMemory()}>Load memory</button></div>)}
+
+            {!loading && view === 'agent' && (
+              <AgentFeed
+                events={agentEvents}
+                connected={agentConnected}
+                demoMode={demoMode}
+                backendConfigured={backendConfigured}
+              />
+            )}
           </main>
 
-          <footer className="rg-panel-footer"><span><span className="rg-live-dot" aria-hidden="true" /> Demo engine offline-ready</span><button className="rg-text-button" type="button" onClick={() => void resetDemo()}><RotateCcw aria-hidden="true" size={12} /> Reset demo</button><kbd>⌘G</kbd></footer>
+          <footer className="rg-panel-footer"><span><span className="rg-live-dot" aria-hidden="true" /> {demoMode ? 'Demo engine offline-ready' : 'Live GitHub analysis'}</span><button className="rg-text-button" type="button" onClick={() => void resetDemo()}><RotateCcw aria-hidden="true" size={12} /> Reset demo</button><kbd>⌘G</kbd></footer>
         </motion.aside>
       )}
     </AnimatePresence>

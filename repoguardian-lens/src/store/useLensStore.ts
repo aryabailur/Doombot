@@ -12,6 +12,8 @@ import type {
   HealthReport,
   Insight,
   Investigation,
+  AgentActivityEvent,
+  LensSettings,
   LensView,
   PRReview,
   RepositoryContext,
@@ -35,15 +37,22 @@ type LensState = {
   prReview?: PRReview
   memory?: RepositoryMemory
   answer?: GroundedAnswer
+  agentEvents: AgentActivityEvent[]
+  agentConnected: boolean
+  /** True when a backend origin is set, i.e. autonomous monitoring is reachable. */
+  backendConfigured: boolean
   loading: string | null
   error: string | null
+  /** Set when a live request succeeded only by falling back to seeded data. */
+  notice: string | null
   toggle: () => void
   close: () => void
   setView: (view: LensView) => void
-  setDemoMode: (enabled: boolean) => void
+  setDemoMode: (enabled: boolean) => Promise<void>
   initialize: (context: GitHubContext) => Promise<void>
   runInvestigation: () => Promise<void>
   loadMemory: () => Promise<void>
+  refreshAgentFeed: () => Promise<void>
   loadDuplicates: () => Promise<void>
   ask: (question: string) => Promise<void>
   decideApproval: (action: ApprovalAction, approved: boolean) => Promise<void>
@@ -51,9 +60,16 @@ type LensState = {
   resetDemo: () => Promise<void>
 }
 
+/**
+ * Last degradation notice seen by send(). Read immediately after an await, so
+ * a module-level slot is enough and avoids threading it through every call.
+ */
+let lastNotice: string | null = null
+
 async function send<T>(message: ExtensionMessage): Promise<T> {
   const response = (await chrome.runtime.sendMessage(message)) as ExtensionResponse<T>
   if (!response.ok) throw new Error(response.error)
+  if (response.degraded && response.notice) lastNotice = response.notice
   return response.data
 }
 
@@ -70,31 +86,45 @@ export const useLensStore = create<LensState>((set, get) => ({
   view: 'overview',
   status: 'online',
   duplicates: [],
+  agentEvents: [],
+  agentConnected: false,
+  backendConfigured: false,
   loading: null,
   error: null,
+  notice: null,
 
   toggle: () => set((state) => ({ isOpen: !state.isOpen })),
   close: () => set({ isOpen: false }),
   setView: (view) => set({ view }),
-  setDemoMode: (enabled) =>
-    set({
-      demoMode: enabled,
-      error: enabled
-        ? null
-        : 'Live GitHub analysis needs a configured RepoGuardian backend. Demo repository data remains active.',
-    }),
+  setDemoMode: async (enabled) => {
+    set({ demoMode: enabled, error: null })
+    // Persisted in the service worker, which is what actually selects the
+    // engine -- the panel's flag alone would change nothing.
+    await send({ type: 'SET_SETTINGS', settings: { demoMode: enabled } })
+    await get().initialize(get().context)
+  },
 
   initialize: async (context) => {
+    // The service worker owns the mode; read it back so a reopened panel does
+    // not show "Demo" while live requests are being served, or the reverse.
+    try {
+      const settings = await send<LensSettings>({ type: 'GET_SETTINGS' })
+      set({ demoMode: settings.demoMode, backendConfigured: Boolean(settings.backendUrl) })
+    } catch {
+      // Storage unavailable: keep the safe demo default.
+    }
     const coordinates = repositoryCoordinates(context)
     set({
       context,
       loading: 'Retrieving project memory',
       error: null,
+      notice: null,
       view: context.type === 'pull_request' ? 'pr' : 'overview',
       investigation: undefined,
       duplicates: [],
       answer: undefined,
     })
+    lastNotice = null
     try {
       const [repository, health, activity] = await Promise.all([
         send<RepositoryContext>({ type: 'GET_REPOSITORY_CONTEXT', ...coordinates }),
@@ -110,7 +140,17 @@ export const useLensStore = create<LensState>((set, get) => ({
         context.type === 'pull_request'
           ? await send<PRReview>({ type: 'GET_PR_REVIEW', ...coordinates, pullNumber: context.pullNumber })
           : undefined
-      set({ repository, health, activity, insight, investigation, prReview, loading: null, status: 'online' })
+      set({
+        repository,
+        health,
+        activity,
+        insight,
+        investigation,
+        prReview,
+        loading: null,
+        status: 'online',
+        notice: lastNotice,
+      })
     } catch (error) {
       set({
         loading: null,
@@ -137,6 +177,18 @@ export const useLensStore = create<LensState>((set, get) => ({
         status: 'attention',
         error: error instanceof Error ? error.message : 'The investigation could not complete.',
       })
+    }
+  },
+
+  refreshAgentFeed: async () => {
+    try {
+      const feed = await send<{ connected: boolean; events: AgentActivityEvent[] }>({
+        type: 'GET_AGENT_ACTIVITY',
+      })
+      set({ agentEvents: feed.events, agentConnected: feed.connected })
+    } catch {
+      // The worker may be asleep; the next poll picks it up.
+      set({ agentConnected: false })
     }
   },
 
@@ -221,3 +273,20 @@ export const useLensStore = create<LensState>((set, get) => ({
     }
   },
 }))
+
+/**
+ * Analyse an arbitrary repository for the X-ray panel.
+ *
+ * Separate from the store because it targets a repository the user typed in
+ * rather than the one on screen, so it must not overwrite panel state.
+ */
+export async function analyzeRepository(
+  owner: string,
+  repo: string,
+): Promise<{ health: HealthReport; memory: RepositoryMemory }> {
+  const [health, memory] = await Promise.all([
+    send<HealthReport>({ type: 'GET_HEALTH', owner, repo }),
+    send<RepositoryMemory>({ type: 'GET_REPOSITORY_MEMORY', owner, repo }),
+  ])
+  return { health, memory }
+}

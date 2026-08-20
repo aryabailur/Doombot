@@ -4,10 +4,19 @@ import { ArrowRight, Search } from 'lucide-react'
 import type { GroundedAnswer } from '@/lib/types'
 import { EvidenceChip } from './EvidenceChip'
 
-const EXAMPLES = [
+/** Seeded prompts reference the demo repository's issue numbers. */
+const DEMO_EXAMPLES = [
   'What should I care about?',
   'Why did you escalate #482?',
   'Is PR #201 risky?',
+  'What changed recently?',
+]
+
+/** Live prompts must not name issues that may not exist in this repository. */
+const LIVE_EXAMPLES = [
+  'What should I care about?',
+  'Find similar bugs',
+  'Show authentication issues',
   'What changed recently?',
 ]
 
@@ -15,11 +24,14 @@ export function AskAgent({
   answer,
   loading,
   onAsk,
+  demoMode,
 }: {
   answer?: GroundedAnswer
   loading: boolean
   onAsk: (question: string) => void
+  demoMode: boolean
 }) {
+  const examples = demoMode ? DEMO_EXAMPLES : LIVE_EXAMPLES
   const [question, setQuestion] = useState('')
 
   const submit = (event: FormEvent) => {
@@ -49,10 +61,10 @@ export function AskAgent({
         </div>
       </form>
       <div className="rg-example-list">
-        {EXAMPLES.map((example) => <button type="button" key={example} onClick={() => { setQuestion(example); onAsk(example) }}>{example}</button>)}
+        {examples.map((example) => <button type="button" key={example} onClick={() => { setQuestion(example); onAsk(example) }}>{example}</button>)}
       </div>
       {loading && (
-        <div className="rg-story-loading" role="status"><span className="rg-loading-pulse" /><div><strong>Searching repository memory</strong><p>#331 · #402 · PR #188 · #417</p></div></div>
+        <div className="rg-story-loading" role="status"><span className="rg-loading-pulse" /><div><strong>Searching repository memory</strong><p>{demoMode ? '#331 · #402 · PR #188 · #417' : 'Ranking issues by relevance'}</p></div></div>
       )}
       {answer && !loading && (
         <article className="rg-answer">

@@ -309,9 +309,9 @@
 }
 
 .rg-mode-switch button.is-active {
-  background: var(--lens-raised);
-  border-color: var(--lens-border);
-  color: var(--lens-secondary);
+  background: color-mix(in srgb, var(--lens-primary) 16%, var(--lens-raised));
+  border-color: color-mix(in srgb, var(--lens-primary) 60%, var(--lens-border));
+  color: var(--lens-text);
 }
 
 .rg-mode-switch button span { color: var(--lens-success); font-size: 7px; margin-right: 3px; }
@@ -833,4 +833,125 @@ button.rg-evidence-chip:hover { background: color-mix(in srgb, var(--lens-live) 
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* A degraded-but-successful live result: informational, not an error. */
+.rg-notice-state {
+  display: flex;
+  gap: 11px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  border: 1px solid color-mix(in srgb, var(--lens-warning) 42%, var(--lens-border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--lens-warning) 8%, var(--lens-surface));
+}
+
+.rg-notice-state svg {
+  color: var(--lens-warning);
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.rg-notice-state strong {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--lens-text);
+  margin-bottom: 3px;
+}
+
+.rg-notice-state p {
+  margin: 0 0 8px;
+  color: var(--lens-secondary);
+  font-size: 12px;
+}
+
+/* Inline failure under the X-ray form. */
+.rg-inline-error {
+  margin: 10px 0 0;
+  padding: 8px 11px;
+  border: 1px solid color-mix(in srgb, var(--lens-danger) 40%, var(--lens-border));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--lens-danger) 8%, var(--lens-surface));
+  color: var(--lens-secondary);
+  font-size: 11.5px;
+}
+
+/* Live agent activity feed. */
+.rg-feed-note {
+  margin: 0;
+  color: var(--lens-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.rg-feed-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--lens-dim);
+}
+
+.rg-feed-status span { font-size: 8px; }
+.rg-feed-status.is-live { color: var(--lens-success); }
+
+.rg-feed {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rg-feed-item {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 8px 10px;
+  border-left: 2px solid var(--lens-border);
+  background: color-mix(in srgb, var(--lens-surface) 70%, transparent);
+}
+
+.rg-feed-item.is-warning { border-left-color: var(--lens-warning); }
+.rg-feed-item.is-error { border-left-color: var(--lens-danger); }
+
+.rg-feed-icon {
+  color: var(--lens-primary);
+  display: flex;
+  margin-top: 1px;
+  flex-shrink: 0;
+}
+
+.rg-feed-item.is-warning .rg-feed-icon { color: var(--lens-warning); }
+.rg-feed-item.is-error .rg-feed-icon { color: var(--lens-danger); }
+
+.rg-feed-item p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--lens-text);
+  line-height: 1.45;
+}
+
+.rg-feed-item small {
+  color: var(--lens-dim);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  letter-spacing: 0.02em;
+}
+
+.rg-feed-spin { animation: rg-feed-rotate 900ms linear infinite; }
+
+@keyframes rg-feed-rotate {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rg-feed-spin { animation: none; }
 }

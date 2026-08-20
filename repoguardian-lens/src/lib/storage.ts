@@ -1,4 +1,4 @@
-import type { ApprovalAction, DecisionFeedback, DemoState } from './types'
+import type { ApprovalAction, DecisionFeedback, DemoState, LensSettings } from './types'
 
 const DEMO_STATE_KEY = 'repoguardian.demoState'
 
@@ -39,4 +39,23 @@ export async function resetDemoState(): Promise<DemoState> {
   const state = structuredClone(EMPTY_STATE)
   await storageArea()?.set({ [DEMO_STATE_KEY]: state })
   return state
+}
+
+const SETTINGS_KEY = 'repoguardian.settings'
+
+export type { LensSettings }
+
+const DEFAULT_SETTINGS: LensSettings = { demoMode: true }
+
+export async function readSettings(): Promise<LensSettings> {
+  const area = storageArea()
+  if (!area) return { ...DEFAULT_SETTINGS }
+  const stored = await area.get(SETTINGS_KEY)
+  return { ...DEFAULT_SETTINGS, ...(stored[SETTINGS_KEY] as LensSettings | undefined) }
+}
+
+export async function saveSettings(patch: Partial<LensSettings>): Promise<LensSettings> {
+  const next = { ...(await readSettings()), ...patch }
+  await storageArea()?.set({ [SETTINGS_KEY]: next })
+  return next
 }
