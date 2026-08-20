@@ -134,3 +134,47 @@ export interface ActivityPayload {
   message: string;
   severity: string;
 }
+
+/**
+ * Issue relationship graph (F15), mirroring api/CLAUDE.md 14 and the output of
+ * `rag.graph.build_graph`.
+ *
+ * `IssueGraph.tsx` declares structurally identical types for its own props.
+ * They are intentionally not imported from here: the component must render
+ * from fixtures with no API in play, and coupling its props to the wire
+ * contract would break that.
+ */
+export type GraphCategory =
+  | "security"
+  | "duplicate"
+  | "stale"
+  | "resolved"
+  | "open";
+
+export type GraphLinkKind = "duplicate" | "similar" | "reference" | "metadata";
+
+export interface GraphNode {
+  id: string;
+  number: number;
+  title: string;
+  category: GraphCategory;
+  state: string;
+  labels: string[];
+  engagement: number;
+  escalated: boolean;
+}
+
+export interface GraphLink {
+  source: string;
+  target: string;
+  kind: GraphLinkKind;
+  score: number;
+  why: string;
+}
+
+export interface GraphStats {
+  node_count: number;
+  link_count: number;
+  duplicate_links: number;
+  by_category: Record<string, number>;
+}
