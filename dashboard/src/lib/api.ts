@@ -1,4 +1,6 @@
 import type {
+  CodeGraphResponseApi,
+  IssueGraphResponseApi,
   RepoSummaryApi,
   HealthResponseApi,
   InvestigationSummary,
@@ -114,4 +116,32 @@ export function approveAction(actionId: string): Promise<ApproveActionResponseAp
 
 export function rejectAction(actionId: string): Promise<ApproveActionResponseApi> {
   return request(`/api/actions/${actionId}/reject`, { method: "POST" });
+}
+
+/** Issue relationship graph (F15). Requires the repository to be indexed. */
+export function getIssueGraph(
+  owner: string,
+  repo: string
+): Promise<IssueGraphResponseApi> {
+  return request(`/api/repos/${owner}/${repo}/graph`);
+}
+
+/**
+ * Semantic code graph (F15).
+ *
+ * `changedPaths` is optional and drives the blast-radius overlay: pass the
+ * files a pull request touches and each unit comes back marked changed,
+ * rippled, or unaffected.
+ */
+export function getCodeGraph(
+  owner: string,
+  repo: string,
+  changedPaths: string[] = []
+): Promise<CodeGraphResponseApi> {
+  const query = changedPaths
+    .map((path) => `changed_path=${encodeURIComponent(path)}`)
+    .join("&");
+  return request(
+    `/api/repos/${owner}/${repo}/code-graph${query ? `?${query}` : ""}`
+  );
 }

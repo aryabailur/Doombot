@@ -10,6 +10,7 @@ import { WeeklyBrief } from "./pages/WeeklyBrief";
 import { DuplicateIntelligence } from "./pages/DuplicateIntelligence";
 import { SecuritySignals } from "./pages/SecuritySignals";
 import { ProjectMemory } from "./pages/ProjectMemory";
+import { Graphs } from "./pages/Graphs";
 import { ApprovalCenter } from "./pages/ApprovalCenter";
 
 export function App() {
@@ -26,6 +27,7 @@ export function App() {
         <Route path="/duplicates" element={<DuplicateIntelligence />} />
         <Route path="/security" element={<SecuritySignals />} />
         <Route path="/memory" element={<ProjectMemory />} />
+        <Route path="/graphs" element={<Graphs />} />
         <Route path="/approvals" element={<ApprovalCenter />} />
       </Route>
     </Routes>

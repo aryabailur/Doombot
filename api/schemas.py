@@ -163,3 +163,103 @@ class SuggestedAction(BaseModel):
 class ApproveActionResponse(BaseModel):
     ok: bool
     result: str
+
+
+# ---------------------------------------------------------------------------
+# F15 graph models. Ported verbatim from the reference implementation so the
+# frontend contract is identical on both branches -- a graph payload that
+# differs by a field name is the kind of drift that only shows up at runtime.
+# ---------------------------------------------------------------------------
+
+class GraphNode(BaseModel):
+    id: str
+    number: int
+    title: str
+    category: Literal["security", "duplicate", "stale", "resolved", "open"]
+    state: str
+    labels: list[str]
+    engagement: int
+    escalated: bool
+
+
+class GraphLink(BaseModel):
+    source: str
+    target: str
+    kind: Literal["duplicate", "similar", "reference", "metadata"]
+    score: float
+    why: str
+
+
+class GraphResponse(BaseModel):
+    nodes: list[GraphNode]
+    links: list[GraphLink]
+    stats: dict
+
+
+class CodeGraphNode(BaseModel):
+    id: str
+    qualname: str
+    symbol_name: str
+    file_path: str
+    kind: str
+    runtime: str
+    language: str
+    start_line: int
+    end_line: int
+    cluster_label: str
+    in_degree: int
+    out_degree: int
+    hub_score: float
+    x2d: float
+    y2d: float
+    x3d: float
+    y3d: float
+    z3d: float
+    impact_status: Literal["changed", "ripple", "unaffected"]
+    impact_distance: int | None
+
+
+class CodeGraphLink(BaseModel):
+    source: str
+    target: str
+    edge_type: Literal["calls", "renders", "http_calls"]
+    why: str
+
+
+class CodeGraphImpactedUnit(BaseModel):
+    qualname: str
+    distance: int
+    edge_type: Literal["calls", "renders", "http_calls"]
+
+
+class CodeGraphClusterImpact(BaseModel):
+    cluster: str
+    impact_score: float
+    changed_count: int
+    ripple_count: int
+    total_count: int
+
+
+class CodeGraphImpact(BaseModel):
+    risk_level: Literal["low", "medium", "high", "critical"]
+    changed_units: list[str]
+    impacted_units: list[CodeGraphImpactedUnit]
+    cluster_impact: list[CodeGraphClusterImpact]
+    suggested_labels: list[str]
+
+
+class CodeGraphStats(BaseModel):
+    node_count: int
+    link_count: int
+    cluster_count: int
+    clusters: list[str]
+    languages: list[str]
+    attribution: str
+
+
+class CodeGraphResponse(BaseModel):
+    repository: str
+    nodes: list[CodeGraphNode]
+    links: list[CodeGraphLink]
+    stats: CodeGraphStats
+    impact: CodeGraphImpact

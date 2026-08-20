@@ -10,9 +10,11 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, Query
 
 from api.schemas import (
+    CodeGraphResponse,
+    GraphResponse,
     ActivityEvent,
     ActivityPage,
     BriefResponse,
@@ -309,3 +311,79 @@ async def get_activity(repo_name: str | None = None, limit: int = 50) -> Activit
         for step in steps
     ]
     return ActivityPage(events=events, next_cursor=None)
+
+
+# ---------------------------------------------------------------------------
+# F15 — the two graphs.
+#
+# Both read data that is already indexed: the issue graph reads the
+# `{repo}-issues` Chroma collection that duplicate detection populates, and
+# the code graph parses repository source. Neither runs a model, so both are
+# imported at module scope rather than lazily.
+# ---------------------------------------------------------------------------
+
+from functools import lru_cache  # noqa: E402  (kept beside its only user)
+
+from rag.graph import build_code_graph, build_graph  # noqa: E402
+
+
+def _escalated_issue_numbers(repo_name: str) -> set[int]:
+    """Issue numbers with an open escalation, so the graph can ring them.
+
+    Never raises: the graph is still worth rendering before SQLite has any
+    escalations in it, and a missing ring is a far smaller problem than a
+    500 on the whole page.
+    """
+    numbers: set[int] = set()
+    try:
+        for escalation in db.list_escalations(resolved=False):
+            if escalation.get("repo_name") != repo_name:
+                continue
+            investigation = db.get_investigation(escalation["investigation_id"])
+            if investigation and investigation.get("kind") == "issue":
+                numbers.add(int(investigation["number"]))
+    except Exception:
+        return set()
+    return numbers
+
+
+@router.get("/api/repos/{owner}/{repo}/graph", response_model=GraphResponse)
+def get_issue_graph(owner: str, repo: str) -> GraphResponse:
+    """Issue relationship graph: which issues relate, and why.
+
+    Edges carry their own justification -- a cosine score, an explicit `#123`
+    reference, or a shared label -- so a maintainer can interrogate any
+    connection rather than trusting the layout.
+    """
+    repo_name = f"{owner}/{repo}"
+    return GraphResponse.model_validate(
+        build_graph(repo_name, _escalated_issue_numbers(repo_name))
+    )
+
+
+@lru_cache(maxsize=8)
+def _cached_code_graph(repo_name: str, changed_paths: tuple[str, ...]) -> dict:
+    """Small cache: construction is deterministic and reads every source file.
+
+    Reading files is one GitHub request each, which is the most expensive
+    thing in this module. Tab changes in the UI would otherwise rebuild an
+    identical graph on every switch.
+    """
+    return build_code_graph(repo_name, changed_paths)
+
+
+@router.get("/api/repos/{owner}/{repo}/code-graph", response_model=CodeGraphResponse)
+def get_code_graph(
+    owner: str,
+    repo: str,
+    changed_path: list[str] = Query(default=[]),
+) -> CodeGraphResponse:
+    """Semantic code structure, with an optional blast-radius overlay.
+
+    Repeat `changed_path` to model every file a pull request touches; the
+    response then marks each unit changed, rippled, or unaffected. Read-only
+    and deterministic.
+    """
+    repo_name = f"{owner}/{repo}"
+    graph = _cached_code_graph(repo_name, tuple(sorted(set(changed_path))))
+    return CodeGraphResponse.model_validate(graph)

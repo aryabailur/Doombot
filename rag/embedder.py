@@ -16,6 +16,31 @@ def _get_model():
     return _model
 
 
+def get_collection(repo_name: str, kind: str = "issues") -> Chroma:
+    """Open an existing collection for reading, without indexing anything.
+
+    Added for the graph builders (F15), which read the vectors that
+    `index_issues` and `embeder` already wrote rather than embedding again.
+    Purely additive: the indexing functions keep constructing their own
+    handles exactly as before.
+
+    The Chroma configuration is duplicated from those functions on purpose --
+    persist_directory, the collection-name suffix, and the cosine space must
+    all match or this silently opens a *different*, empty collection and every
+    graph comes back with no nodes. If the indexing config ever changes, this
+    has to change with it.
+    """
+    if kind not in ("issues", "code"):
+        raise ValueError(f"unknown collection kind: {kind!r}")
+
+    return Chroma(
+        persist_directory="./chroma_db",
+        embedding_function=_get_model(),
+        collection_name=repo_name.replace("/", "-") + f"-{kind}",
+        collection_metadata={"hnsw:space": "cosine"},
+    )
+
+
 def embeder(repo_name):
     file_paths=get_repo_files(repo_name)
     file_content=[]

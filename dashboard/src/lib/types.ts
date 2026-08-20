@@ -175,3 +175,94 @@ export interface ApproveActionResponseApi {
   ok: boolean;
   result: string;
 }
+
+// ---------------------------------------------------------------------------
+// F15 graphs. Hand-mirrored from api/schemas.py, like everything else in this
+// file -- there is no codegen, so these must be kept in step by hand.
+// ---------------------------------------------------------------------------
+
+export type IssueGraphCategory =
+  | "security"
+  | "duplicate"
+  | "stale"
+  | "resolved"
+  | "open";
+
+export type IssueGraphLinkKind =
+  | "duplicate"
+  | "similar"
+  | "reference"
+  | "metadata";
+
+export interface IssueGraphNodeApi {
+  id: string;
+  number: number;
+  title: string;
+  category: IssueGraphCategory;
+  state: string;
+  labels: string[];
+  engagement: number;
+  escalated: boolean;
+}
+
+export interface IssueGraphLinkApi {
+  source: string;
+  target: string;
+  kind: IssueGraphLinkKind;
+  score: number;
+  /** Why these two are connected -- rendered verbatim when a link is clicked. */
+  why: string;
+}
+
+export interface IssueGraphResponseApi {
+  nodes: IssueGraphNodeApi[];
+  links: IssueGraphLinkApi[];
+  stats: Record<string, unknown>;
+}
+
+export type CodeGraphEdgeType = "calls" | "renders" | "http_calls";
+
+export interface CodeGraphNodeApi {
+  id: string;
+  qualname: string;
+  symbol_name: string;
+  file_path: string;
+  kind: string;
+  runtime: string;
+  language: string;
+  start_line: number;
+  end_line: number;
+  cluster_label: string;
+  in_degree: number;
+  out_degree: number;
+  hub_score: number;
+  x2d: number;
+  y2d: number;
+  x3d: number;
+  y3d: number;
+  z3d: number;
+  impact_status: "changed" | "ripple" | "unaffected";
+  impact_distance: number | null;
+}
+
+export interface CodeGraphLinkApi {
+  source: string;
+  target: string;
+  edge_type: CodeGraphEdgeType;
+  why: string;
+}
+
+export interface CodeGraphResponseApi {
+  repository: string;
+  nodes: CodeGraphNodeApi[];
+  links: CodeGraphLinkApi[];
+  stats: {
+    node_count: number;
+    link_count: number;
+    cluster_count: number;
+    clusters: string[];
+    languages: string[];
+    attribution: string;
+  };
+  impact: Record<string, unknown>;
+}
