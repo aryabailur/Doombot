@@ -435,7 +435,7 @@ the same file).
 
 ---
 
-## 12b. Stretch feature: adaptive repository learning (F17) — not built
+## 12b. Stretch feature: adaptive repository learning (F17) — built
 
 The labeler classifies each issue on its own merits. A repository's maintainers
 have usually answered that question hundreds of times already: every closed
@@ -443,12 +443,21 @@ issue is a labelled example. F17 retrieves the nearest *closed* neighbours and
 uses their labels as few-shot context, so classification follows the project's
 conventions rather than the model's general priors.
 
-The retrieval half is already here — `index_issues` writes `state` and `labels`
-into Chroma metadata, and `find_similar` does the search. What is missing is a
-query filtered to `state == "closed"` and the prompt assembly, both in
-`agents/triage/labeler.py` (Stream B). Full spec in `docs/INTELLIGENCE.md`.
+Implemented as `find_precedents` in this module, consumed by
+`agents/triage/labeler.py`. It returns closed issues above `RELATED_THRESHOLD`
+that actually carry labels, newest-most-similar first.
 
-Three rules if you build it:
+**The vocabulary mismatch is the part that surprises people.** A repository's
+real labels are usually nothing like `ALLOWED_LABELS`: measured on yt-dlp, the
+precedents come back labelled `site-bug`, `site:youtube`, `ai-policy-violation`.
+Showing them is the whole point -- they encode how the project categorises -- but
+the prompt must tell the model to *map* rather than copy, or every label it
+emits is filtered out by the parser and the issue silently drops to
+suggest-only. Verified working: yt-dlp #17404 classified with the reason
+"matching prior site-bug" at 0.97 confidence, citing four precedents, while the
+labels it emitted stayed inside the allowed list.
+
+Three rules that still hold:
 
 - **Reuse `RELATED_THRESHOLD` (0.65).** Do not introduce a second notion of
   "similar enough" — §9's score-direction warning applies here too, and a

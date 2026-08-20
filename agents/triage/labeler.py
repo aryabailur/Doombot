@@ -38,6 +38,38 @@ ALLOWED_LABELS = [
     "enhancement",
 ]
 
+_PRECEDENT_PROMPT = """You are triaging a GitHub issue for an open-source maintainer.
+
+This repository's maintainers have already classified similar issues. Use their
+decisions to infer how this project *categorises* problems, not just what it
+calls them -- if they consistently treat breakage of this kind as a bug rather
+than an enhancement request, do the same.
+
+Precedents from closed issues in this repository:
+{precedents}
+
+IMPORTANT: those precedent labels are this repository's own vocabulary and are
+often not in the list you may choose from. Do not copy them. Read what they
+imply about the category and then pick the closest label from the allowed list
+below. For example, a project labelling a broken integration "site-bug" is
+telling you it considers that a bug.
+
+Now the new issue.
+
+Title: {title}
+
+Body:
+{body}
+
+Existing labels: {existing}
+
+Choose 1-3 labels from EXACTLY this list, and nothing else: {allowed}
+
+Respond with ONLY a JSON object, no prose, no code fence:
+{{"labels": ["..."], "confidence": 0.0, "reason": "one short sentence"}}
+
+confidence is your certainty (0.0-1.0) that these labels are correct."""
+
 _PROMPT = """You are triaging a GitHub issue for an open-source maintainer.
 
 Title: {title}
@@ -53,6 +85,37 @@ Respond with ONLY a JSON object, no prose, no code fence:
 {{"labels": ["..."], "confidence": 0.0, "reason": "one short sentence"}}
 
 confidence is your certainty (0.0-1.0) that these labels are correct."""
+
+
+def _precedents(state: GraphState, metadata: dict) -> list[dict]:
+    """Closed issues this repository already classified, for few-shot grounding.
+
+    F17. Never raises: the RAG store may be unindexed, empty, or mid-write, and
+    a classification that works today must not start failing because precedent
+    lookup did. An empty list means "no precedent", which the caller handles by
+    using the original prompt.
+    """
+    try:
+        from rag.retriever import find_precedents
+
+        title = metadata.get("title") or ""
+        body = (metadata.get("body") or "")[:2000]
+        return find_precedents(
+            f"{title}\n\n{body}",
+            state.get("repo_name") or "",
+            exclude_number=state.get("issue_number"),
+        )
+    except Exception:
+        return []
+
+
+def _render_precedents(precedents: list[dict]) -> str:
+    """One line per precedent: number, similarity, and the labels chosen."""
+    return "\n".join(
+        f"  #{item['number']} ({item['score']:.2f} similar) -- "
+        f"maintainer labelled: {', '.join(item['labels'])} -- {item['title']}"
+        for item in precedents
+    )
 
 
 def _get_llm():
@@ -119,12 +182,33 @@ def labeler_node(state: GraphState) -> tuple[dict, list[dict]]:
     body = (metadata.get("body") or "")[:4000]  # keep the prompt bounded
     existing = metadata.get("labels") or []
 
-    prompt = _PROMPT.format(
-        title=title,
-        body=body or "(no body)",
-        existing=", ".join(existing) or "(none)",
-        allowed=", ".join(ALLOWED_LABELS),
-    )
+    # F17: ground the classification in this repository's own past decisions.
+    #
+    # Without precedents the model classifies on general intuition, which is
+    # how a project that consistently labels crash reports "bug" gets one
+    # labelled "enhancement". With them, the prompt carries the conventions
+    # the maintainers actually applied to similar closed issues.
+    #
+    # No precedents is a normal outcome -- a young repository has none, and an
+    # unindexed one has none yet -- so the original prompt stays as the
+    # fallback rather than sending an examples section with nothing in it.
+    precedents = _precedents(state, metadata)
+
+    if precedents:
+        prompt = _PRECEDENT_PROMPT.format(
+            precedents=_render_precedents(precedents),
+            title=title,
+            body=body or "(no body)",
+            existing=", ".join(existing) or "(none)",
+            allowed=", ".join(ALLOWED_LABELS),
+        )
+    else:
+        prompt = _PROMPT.format(
+            title=title,
+            body=body or "(no body)",
+            existing=", ".join(existing) or "(none)",
+            allowed=", ".join(ALLOWED_LABELS),
+        )
 
     try:
         response = _get_llm().invoke(prompt)
@@ -144,6 +228,21 @@ def labeler_node(state: GraphState) -> tuple[dict, list[dict]]:
             "snippet": result["reason"] or "no reason given",
         }
     ]
+
+    # Each precedent is cited as evidence, not just fed to the prompt. A
+    # classification the reader cannot trace back to the decisions that shaped
+    # it is the black box this product exists to replace -- "labelled bug
+    # because #142 and #203 were" is reviewable; "labelled bug" is not.
+    for item in precedents:
+        evidence.append({
+            "type": "issue",
+            "ref": str(item["number"]),
+            "score": item["score"],
+            "snippet": (
+                f"maintainer labelled #{item['number']} "
+                f"[{', '.join(item['labels'])}] -- {item['title']}"
+            ),
+        })
 
     # Deterministic overrides -- these are established facts, not guesses.
     if state.get("security_findings"):
