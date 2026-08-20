@@ -43,9 +43,39 @@ import {
   postFeedback,
   WS_URL,
 } from '@/lib/api'
-import type { Escalation, HealthResponse } from '@/lib/types'
+import type { Escalation, HealthResponse, RepoSummary } from '@/lib/types'
 import { useApiData } from '@/lib/useApiData'
 import { useSocket } from '@/lib/useSocket'
+
+/**
+ * The repository list for the selector: what the API knows, plus anything
+ * added this session, plus the current selection.
+ *
+ * Every entry the API did not supply gets zeroed counters rather than
+ * invented ones -- the real values arrive with the next /api/repos response.
+ */
+function mergeRepos(
+  fromApi: RepoSummary[] | null,
+  added: string[],
+  current: string,
+): RepoSummary[] {
+  const merged = [...(fromApi ?? [])]
+  const seen = new Set(merged.map((repo) => repo.repo_name))
+
+  for (const name of [...added, current]) {
+    if (!name || seen.has(name)) {
+      continue
+    }
+    seen.add(name)
+    merged.push({
+      repo_name: name,
+      health_score: 0,
+      open_investigations: 0,
+      last_scan: null,
+    })
+  }
+  return merged
+}
 
 /** Split "owner/repo" for the path-segmented endpoints. */
 function splitRepo(full: string): [string, string] {
@@ -368,6 +398,17 @@ export function App() {
   // One repository per session. A selector exists, but every endpoint is
   // per-repo and nothing needs cross-repo aggregation yet.
   const [repoName, setRepoName] = useState('aryabailur/Doombot')
+  /**
+   * Repositories added this session.
+   *
+   * GET /api/repos derives its list from investigation history plus the
+   * monitor list, and indexing creates neither -- so a freshly added
+   * repository is absent from that response and would drop out of the
+   * dropdown the moment the list refreshed. Holding the names here keeps a
+   * repo selectable from the instant it is added until its first
+   * investigation gives the backend a record of it.
+   */
+  const [addedRepos, setAddedRepos] = useState<string[]>([])
   const [indexing, setIndexing] = useState(false)
   const [owner, repo] = splitRepo(repoName)
 
@@ -397,19 +438,22 @@ export function App() {
                   setIndexing(false)
                 }
               }}
+              onAddRepository={async (name) => {
+                // Indexing is what actually registers a repository: the
+                // backend derives /api/repos from history plus the monitor
+                // list, so there is no separate registration call to make.
+                // A failure propagates so the selector can show it inline --
+                // a bad name or a private repo must not look like success.
+                const [nextOwner, nextRepo] = splitRepo(name)
+                await indexRepo(nextOwner, nextRepo)
+                setAddedRepos((current) =>
+                  current.includes(name) ? current : [...current, name],
+                )
+                setRepoName(name)
+                repos.reload()
+              }}
               onSelect={(next) => setRepoName(next.repo_name)}
-              repos={
-                repos.data?.length
-                  ? repos.data
-                  : [
-                      {
-                        repo_name: repoName,
-                        health_score: 0,
-                        open_investigations: 0,
-                        last_scan: null,
-                      },
-                    ]
-              }
+              repos={mergeRepos(repos.data, addedRepos, repoName)}
               selectedRepo={repos.data?.find(
                 (item) => item.repo_name === repoName,
               )}

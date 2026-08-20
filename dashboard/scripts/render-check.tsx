@@ -42,6 +42,8 @@ const checks: [string, () => string][] = [
   ['AgentActivityFeed', () => renderToString(<AgentActivityFeed items={d.demoActivity} />)],
   ['AgentStatusIndicator', () => renderToString(<AgentStatusIndicator connectionState="connected" githubConnected lastSyncAt={new Date().toISOString()} />)],
   ['RepositorySelector', () => renderToString(<RepositorySelector repos={d.demoRepos} selectedRepo={d.demoRepos[0]} onSelect={()=>{}} onIndexRequested={async()=>{}} />)],
+  ['RepositorySelector/add', () => renderToString(<RepositorySelector repos={d.demoRepos} selectedRepo={d.demoRepos[0]} onSelect={()=>{}} onIndexRequested={async()=>{}} onAddRepository={async()=>{}} />)],
+  ['RepositorySelector/empty+add', () => renderToString(<RepositorySelector repos={[]} onSelect={()=>{}} onIndexRequested={async()=>{}} onAddRepository={async()=>{}} />)],
   ['EscalationTable', () => renderToString(<EscalationTable rows={d.demoEscalations} filters={{}} onSelect={()=>{}} onFiltersChange={()=>{}} selectedId="esc-1" />)],
   ['EscalationTable/empty', () => renderToString(<EscalationTable rows={[]} filters={{}} onSelect={()=>{}} onFiltersChange={()=>{}} />)],
   ['EscalationTable/filtered-out', () => renderToString(<EscalationTable rows={d.demoEscalations} filters={{severity:['critical'],minConfidence:0.99}} onSelect={()=>{}} onFiltersChange={()=>{}} />)],
