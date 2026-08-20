@@ -23,6 +23,7 @@ import hashlib
 import itertools
 import math
 from collections import defaultdict, deque
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import PurePosixPath
 import re
 from typing import Iterable, Mapping
@@ -59,6 +60,24 @@ _ISSUE_REF = re.compile(r"(?<![\w#])#(\d{1,6})(?!\d)")
 # ambiguous calls instead of drawing a confident-looking edge that cannot be
 # justified. No LLM is involved in graph construction.
 _CODE_SUFFIXES = {".py", ".js", ".jsx", ".ts", ".tsx"}
+
+# Source files read per code-graph build. One GitHub request each, so this is
+# the single most quota-expensive operation in the product. 60 keeps a build
+# inside a few seconds and a few percent of the hourly quota, which is what
+# makes the graph actually appear rather than time out.
+MAX_CODE_FILES = 60
+
+# Directories never worth graphing: not the project's own code, and they
+# dominate the file count on any real repository.
+_VENDORED_PARTS = {
+    "node_modules", "dist", "build", "vendor", "third_party",
+    ".venv", "venv", "site-packages", "__pycache__", "migrations",
+    "coverage", ".next", "out",
+}
+
+
+def _is_vendored(path: str) -> bool:
+    return any(part in _VENDORED_PARTS for part in path.replace("\\", "/").split("/"))
 _TS_SUFFIXES = {".js", ".jsx", ".ts", ".tsx"}
 _HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
 _GRAPHDEV_ATTRIBUTION = (
@@ -828,17 +847,50 @@ def _impact_overlay(nodes: list[dict], links: list[dict], changed_paths: set[str
 
 
 def _fetch_code_files(repo_name: str) -> dict[str, str]:
+    """Read source files for the semantic graph, bounded.
+
+    GitHub has no bulk file-content endpoint, so this is one request per file.
+    Unbounded, that is both the slowest and most expensive operation in the
+    product: on a large repository it exhausted a 120s timeout and burned
+    hundreds of requests from the 5000/hour quota, so the code graph silently
+    never arrived and the dashboard showed only the issue graph.
+
+    MAX_CODE_FILES caps it. Files are ordered so the cap keeps what is worth
+    graphing: application source first, vendored and generated trees last. A
+    graph of the first 60 real modules is far more useful than a timeout.
+    """
     from mcp_server.github_client import get_file_content, get_repo_files
 
+    candidates = [
+        path
+        for path in get_repo_files(repo_name)
+        if PurePosixPath(path).suffix.lower() in _CODE_SUFFIXES
+        and not _is_vendored(path)
+    ]
+    # Shallower paths first: a repo's real entry points live near the root,
+    # while deep paths are usually tests, fixtures, or examples.
+    candidates.sort(key=lambda path: (path.count("/"), path))
+
+    # Fetched concurrently. These are independent, latency-bound GitHub reads --
+    # sequentially, 60 files at ~1.2s each is 72s, which is most of a 120s
+    # timeout spent waiting on the network doing nothing. Eight at a time brings
+    # it to roughly a tenth of that. Kept modest deliberately: more parallelism
+    # is what trips GitHub's secondary rate limit, which costs far more than it
+    # saves.
+    selected = candidates[:MAX_CODE_FILES]
     result: dict[str, str] = {}
-    for path in get_repo_files(repo_name):
-        if PurePosixPath(path).suffix.lower() not in _CODE_SUFFIXES:
-            continue
+
+    def read(path: str) -> tuple[str, str | None]:
         try:
-            result[path] = get_file_content(repo_name, path)
+            return path, get_file_content(repo_name, path)
         except Exception:
-            # One unreadable/generated file must not erase the useful graph.
-            continue
+            # One unreadable or generated file must not erase a useful graph.
+            return path, None
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for path, content in pool.map(read, selected):
+            if content is not None:
+                result[path] = content
     return result
 
 

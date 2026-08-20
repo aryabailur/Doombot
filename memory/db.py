@@ -1,5 +1,6 @@
 """SQLite connection helper and schema DDL."""
 import os
+from pathlib import Path
 import sqlite3
 
 _conn: sqlite3.Connection | None = None
@@ -76,7 +77,24 @@ def get_conn() -> sqlite3.Connection:
     Safe to call repeatedly — reuse a module-level singleton."""
     global _conn
     if _conn is None:
-        db_path = os.getenv("DB_PATH", "./doombot.db")
+        # Default resolved against the repository root, not the cwd. An MCP
+        # client spawns the server with an arbitrary cwd, and "./doombot.db"
+        # would then silently create a second, empty database rather than
+        # opening the real one -- the tools would answer, truthfully, that
+        # there are no investigations.
+        # Resolved against the repository root whenever it is relative.
+        #
+        # Both the default and the .env value are relative ("./doombot.db"), and
+        # relative means "relative to the cwd" -- fine under uvicorn started in
+        # the repo, wrong for an MCP client, which spawns the server with an
+        # arbitrary cwd. There sqlite happily *creates* a second, empty database
+        # instead of failing, so the tools answer truthfully that there are no
+        # investigations. An absolute DB_PATH is still honoured as given.
+        repo_root = Path(__file__).resolve().parents[1]
+        configured = Path(os.getenv("DB_PATH") or "doombot.db")
+        db_path = str(
+            configured if configured.is_absolute() else repo_root / configured
+        )
         _conn = sqlite3.connect(db_path, check_same_thread=False)
         _conn.row_factory = sqlite3.Row
         _conn.execute("PRAGMA journal_mode=WAL")

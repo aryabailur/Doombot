@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "doombot": {
+      "type": "stdio",
+      "command": "python",
+      "args": [
+        "-m",
+        "mcp_server.server"
+      ],
+      "env": {}
+    }
+  }
+}

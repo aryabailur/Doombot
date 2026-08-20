@@ -271,6 +271,44 @@ them in sync is a human responsibility, enforced by rule 2 above.
 
 ---
 
+## 7b. This repo ships its own MCP tools — use them
+
+`.mcp.json` registers a `doombot` MCP server exposing seven **read-only** tools
+over Doombot's own analysis. If you are an agent working in this repository and
+a question is about *what Doombot found*, call these instead of reading code,
+grepping, or inspecting `doombot.db` by hand. They are the analysis the agent
+already computed and the same numbers the dashboard shows.
+
+| Ask | Tool |
+|---|---|
+| What needs attention / what is escalated? | `get_escalations_mcp` |
+| What has been investigated, and decided what? | `list_investigations_mcp` |
+| Why was that decided? Show the reasoning. | `get_investigation_mcp` |
+| Has this been reported before? | `search_issues_mcp` |
+| Is issue N a duplicate? | `find_duplicates_mcp` |
+| How healthy is the project? | `get_health_score_mcp` |
+| How do these issues relate? | `get_issue_graph_mcp` |
+
+**A question like "what needs my attention in this repo?" means the escalation
+queue, not `git status`.** Repository *state* questions (branches, diffs, tests)
+are still ordinary git and file work — these tools are about the agent's
+findings.
+
+Two practical notes:
+
+- The first five cost **no GitHub requests** — they read SQLite and the local
+  vector store. `get_health_score_mcp` and `find_duplicates_mcp` each cost one,
+  against a 5000/hour quota.
+- `get_issue_graph_mcp` returns the whole graph: measured at 112 KB, roughly
+  29k tokens, for a 150-issue repository. It exists for programmatic consumers
+  rendering their own visualisation. Do not pull it into a conversation to
+  answer a question one of the other tools answers in 600 tokens.
+
+Full reference: `mcp_server/CLAUDE.md` §4b. Implementation:
+`mcp_server/intelligence.py`.
+
+---
+
 ## 8. Documentation map
 
 Read the root file, then only the folder you are working in.

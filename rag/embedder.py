@@ -3,6 +3,7 @@ from mcp_server.github_client import get_file_content
 from mcp_server.github_client import get_issues
 from langchain_core.documents import Document
 import os
+from pathlib import Path
 
 # langchain_huggingface, langchain_chroma, and langchain_text_splitters are
 # imported INSIDE the functions
@@ -35,7 +36,17 @@ def get_collection(repo_name: str, kind: str):
     kind is "code" or "issues". Collection name is
     f"{repo_name.replace('/','-')}-{kind}".
     """
-    persist_directory = os.environ.get("CHROMA_DIR", "./chroma_db")
+    # Repo-root relative for the same reason as DB_PATH: an MCP client's cwd
+    # is not ours, and "./chroma_db" there is an empty new store, so every
+    # semantic search would return nothing at all.
+    # Repo-root relative when relative, for the same reason as DB_PATH: an MCP
+    # client's cwd is not ours, and a relative "./chroma_db" there is a brand
+    # new empty store, so every semantic search returns nothing.
+    _root = Path(__file__).resolve().parents[1]
+    _configured = Path(os.environ.get("CHROMA_DIR") or "chroma_db")
+    persist_directory = str(
+        _configured if _configured.is_absolute() else _root / _configured
+    )
     collection_name = f"{repo_name.replace('/', '-')}-{kind}"
     from langchain_chroma import Chroma
 

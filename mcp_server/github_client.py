@@ -3,9 +3,17 @@ from urllib3.util import Retry
 from dotenv import load_dotenv
 import logging
 import os
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
-load_dotenv()
+# Load .env from the repository root rather than the process cwd.
+#
+# `load_dotenv()` searches upward from the *current working directory*, which is
+# fine for `uvicorn` started in the repo but wrong for an MCP client: a client
+# spawns `python -m mcp_server.server` with whatever cwd it likes, finds no
+# .env, and every GitHub call then fails unauthenticated for no visible reason.
+# The repo root is knowable from this file's own location, so use that.
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 github_token=os.getenv("GITHUB_TOKEN")
 
 _client: Github | None = None
@@ -96,8 +104,41 @@ SKIP_EXTENSIONS = ['.png', '.jpg', '.gif', '.svg', '.ico', '.pdf', '.zip', '.nod
 SKIP_DIRS = ['node_modules', '.git', 'venv', '__pycache__', 'dist', 'build']
 
 def get_repo_files(repo_name):
+    """Every source path in the repository, in one request.
+
+    This previously walked the tree with `get_contents(dir)` per directory --
+    one GitHub request for every folder. On a real repository that is hundreds
+    of requests before a single file is read, which is what made the code graph
+    time out at 120s and quietly drain the hourly quota.
+
+    The Git Trees API returns the entire tree recursively in one call, so the
+    whole listing costs two requests regardless of repository size. Falls back
+    to the directory walk only if the tree is unavailable (an empty repository,
+    or GitHub truncating an enormous tree).
+    """
     g = _get_client()
     repo = g.get_repo(repo_name)
+
+    try:
+        tree = repo.get_git_tree(repo.default_branch, recursive=True)
+        paths = [
+            element.path
+            for element in tree.tree
+            if element.type == "blob"
+            and not any(skip in element.path for skip in SKIP_DIRS)
+            and not any(element.path.endswith(ext) for ext in SKIP_EXTENSIONS)
+        ]
+        # `truncated` means GitHub gave a partial tree; a partial listing is
+        # still far better than hundreds of requests, so it is used as-is.
+        if paths:
+            return paths
+    except Exception:
+        logger.warning(
+            "get_repo_files: tree unavailable for %s, walking directories",
+            repo_name,
+            exc_info=True,
+        )
+
     content = list(repo.get_contents(""))
     files = []
     while content:

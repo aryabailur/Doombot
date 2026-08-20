@@ -170,29 +170,42 @@ from `tool_names.py` (`GET_ISSUE`, `GET_ISSUES`, `POST_ISSUE_COMMENT`,
 
 ---
 
-## 4b. F18 — the intelligence layer (not built)
+## 4b. F18 — the intelligence layer (built)
 
-Every tool registered today is a GitHub **passthrough**: `get_issue_mcp`,
-`post_issue_comment_mcp`, `add_labels_mcp`. They expose GitHub *to Doombot*.
-Nothing exposes Doombot's own analysis to anything else.
+`tools.py` exposes GitHub **to Doombot**: every tool there is a passthrough.
+`intelligence.py` is the other direction — it exposes Doombot's own analysis to
+any MCP client, so the protocol runs both ways.
 
-F18 adds a second class of tool — `search_issues_mcp`, `find_duplicates_mcp`,
-`get_escalations_mcp`, `get_health_score_mcp`, `get_investigation_mcp`,
-`get_issue_graph_mcp`, `get_weekly_brief_mcp` — making the protocol
-bidirectional. Full spec, including the table of backing modules, is in
-`docs/INTELLIGENCE.md`.
+Registered in `mcp_server/intelligence.py`, names in `tool_names.py` under
+`INTELLIGENCE_TOOLS`:
 
-Two constraints worth stating here, where the tools live:
+| Tool | Backed by | Returns |
+|---|---|---|
+| `search_issues_mcp` | `rag/retriever.py` | semantic matches with cosine scores |
+| `find_duplicates_mcp` | `rag/retriever.py` | duplicate/related buckets + verdict |
+| `get_escalations_mcp` | `memory/repo.py` | the open queue, severity and reason |
+| `get_health_score_mcp` | `api/health.py` | score, breakdown, `measured`, `unreadable` |
+| `get_investigation_mcp` | `memory/repo.py` | one chain replayed, with evidence |
+| `list_investigations_mcp` | `memory/repo.py` | recent decisions, to find an id |
+| `get_issue_graph_mcp` | `rag/graph.py` | nodes and weighted links |
 
-- **Read-only, without exception.** No intelligence tool may post, label, or
-  close. Writes stay behind the decider's approval gates; an external MCP
-  client must not be able to route around a maintainer.
-- **`get_health_score_mcp` must pass through `measured` and `unreadable`.**
-  Three of the four sub-scores return 100 for an empty backlog, so a bare score
-  claims perfect health for a repository nothing has been read from. A client
-  has even less context to catch that than a human reading a dashboard.
+Three properties that must survive any edit:
 
-Names go in `tool_names.py` like everything else (§2).
+- **Read-only, without exception.** No tool here posts, labels, or closes.
+  Writes stay behind the decider's approval gates; an external client must not
+  route around a maintainer. `tests/test_mcp_intelligence.py` asserts this
+  against the source of every registered tool, so adding a write breaks the
+  build rather than shipping quietly.
+- **`get_health_score_mcp` carries `measured` and `unreadable`, and says so in
+  prose.** Three of the four sub-scores return 100 for an empty backlog, so the
+  number is 100 exactly when it means least. A client with no dashboard to look
+  at needs the sentence, not only the flags.
+- **Imports are deferred into each function body.** `rag` pulls in torch and
+  chromadb; importing eagerly would make every client pay seconds just to list
+  the tools, including clients that only call the SQLite-backed ones.
+
+`server.py` imports both modules — `intelligence` for its registration side
+effect. Drop that import and the tools exist but are invisible on the wire.
 
 ---
 
@@ -299,12 +312,16 @@ independent of which client mode is active):
 npx @modelcontextprotocol/inspector python -m mcp_server.server
 ```
 
-Open the Inspector UI, confirm all 8 tools are listed
-(`get_pullRequest_files`, `get_file_content_mcp`, `get_pr_details_mcp`,
-`post_review_comment_mcp`, `get_issue_mcp`, `get_issues_mcp`,
-`post_issue_comment_mcp`, `add_labels_mcp`), and call one read-only tool
-(e.g. `get_issue_mcp`) against a real public repo to confirm the response
-shape.
+Open the Inspector UI and confirm **16** tools are listed: the 9 GitHub
+passthroughs (`get_pullRequest_files`, `get_file_content_mcp`,
+`get_pr_details_mcp`, `post_review_comment_mcp`, `get_issue_mcp`,
+`get_issues_mcp`, `post_issue_comment_mcp`, `get_issue_comments_mcp`,
+`add_labels_mcp`) plus the 7 intelligence tools in §4b. Call one read-only
+tool (e.g. `get_issue_mcp`) against a real public repo to confirm the
+response shape.
+
+The intelligence tools need no network, so they are the cheapest thing to
+demo: `get_escalations_mcp` and `list_investigations_mcp` read SQLite only.
 
 **Direct Python call** (validates `github_client.py` functions without MCP
 in the loop at all):

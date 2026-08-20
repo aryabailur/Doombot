@@ -46,13 +46,13 @@ README says what is actually done.
 | Incomplete-issue follow-up | F09 | P1 | Planned |
 | Project-health analysis | F10 | P1 | Implemented — real 4-axis scoring |
 | Weekly brief | F11 | P2 | Implemented — counts only, deliberately not an LLM call |
-| MCP protocol server | F12 | P2 | Partial — 9 tools registered |
+| MCP protocol server | F12 | P2 | Implemented — 16 tools registered (9 GitHub + 7 intelligence) |
 | Web dashboard | F13 | P0 | Implemented |
 | VS Code extension | F14 | P2 | Implemented |
 | Issue relationship graph | F15 | Stretch | Implemented — live from `rag.graph` |
 | Intelligent issue resolution | F16 | Stretch | Implemented — approval-gated |
 | Adaptive repository learning | F17 | Stretch | Planned — retrieval exists, few-shot prompt does not |
-| MCP intelligence layer | F18 | Stretch | Planned — 9 GitHub tools exist, none expose Doombot's analysis |
+| MCP intelligence layer | F18 | Stretch | Implemented — 7 read-only tools expose Doombot's analysis |
 
 **Working today:** the issue-triage graph (`issue_fetcher → duplicate_detector
 → resolver → security_scanner → impact_scorer → labeler → decider`), the
@@ -60,8 +60,9 @@ PR-review graph (`fetcher → reviewer → test_writer → summarizer`), a FastM
 stdio server over PyGithub, Chroma + MiniLM indexing, all 13 REST endpoints
 plus `/ws`, and the dashboard reading every screen from the API.
 
-**Known gaps:** F09 (incomplete-issue follow-up), F17 and F18 are specified but
-not built — see [docs/INTELLIGENCE.md](docs/INTELLIGENCE.md) for F17/F18.
+**Known gaps:** F09 (incomplete-issue follow-up) and F17 (adaptive repository
+learning) are specified but not built — see
+[docs/INTELLIGENCE.md](docs/INTELLIGENCE.md) for F17.
 
 ---
 
