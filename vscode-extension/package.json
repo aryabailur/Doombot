@@ -1,0 +1,88 @@
+{
+  "name": "doombot",
+  "displayName": "Doombot",
+  "description": "Agentic open-source maintainer assistant — companion view for the Doombot dashboard.",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "doombot.openDashboard",
+        "title": "Doombot: Open Dashboard"
+      },
+      {
+        "command": "doombot.triggerScan",
+        "title": "Doombot: Trigger Repository Scan"
+      },
+      {
+        "command": "doombot.refreshEscalations",
+        "title": "Doombot: Refresh Escalations"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "doombot",
+          "title": "Doombot",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "doombot": [
+        {
+          "id": "doombot.escalations",
+          "name": "Escalations"
+        },
+        {
+          "id": "doombot.investigations",
+          "name": "Recent Investigations"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Doombot",
+      "properties": {
+        "doombot.apiBaseUrl": {
+          "type": "string",
+          "default": "http://localhost:8000",
+          "description": "Base URL of the Doombot API."
+        },
+        "doombot.dashboardUrl": {
+          "type": "string",
+          "default": "http://localhost:5173",
+          "description": "URL of the running Doombot dashboard."
+        },
+        "doombot.repository": {
+          "type": "string",
+          "default": "",
+          "description": "Repository to scan, as owner/repo."
+        },
+        "doombot.pollSeconds": {
+          "type": "number",
+          "default": 15,
+          "description": "How often to refresh escalations and health."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0"
+  }
+}
