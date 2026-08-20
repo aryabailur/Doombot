@@ -435,6 +435,33 @@ the same file).
 
 ---
 
+## 12b. Stretch feature: adaptive repository learning (F17) — not built
+
+The labeler classifies each issue on its own merits. A repository's maintainers
+have usually answered that question hundreds of times already: every closed
+issue is a labelled example. F17 retrieves the nearest *closed* neighbours and
+uses their labels as few-shot context, so classification follows the project's
+conventions rather than the model's general priors.
+
+The retrieval half is already here — `index_issues` writes `state` and `labels`
+into Chroma metadata, and `find_similar` does the search. What is missing is a
+query filtered to `state == "closed"` and the prompt assembly, both in
+`agents/triage/labeler.py` (Stream B). Full spec in `docs/INTELLIGENCE.md`.
+
+Three rules if you build it:
+
+- **Reuse `RELATED_THRESHOLD` (0.65).** Do not introduce a second notion of
+  "similar enough" — §9's score-direction warning applies here too, and a
+  fourth threshold is a fourth thing to get backwards.
+- **Emit the retrieved examples as step evidence**, with issue numbers and
+  scores. A classification the reader cannot trace is the black box this
+  product exists to replace.
+- **Degrade, do not distort.** A repository with no closed issues must fall
+  back to today's prompt. Never fabricate examples, and never let an empty
+  history quietly lower confidence.
+
+---
+
 ## 13. Stretch feature: issue relationship graph (F15)
 
 **File:** `rag/graph.py`. Entry point `build_graph(repo_name, security_numbers)`,
