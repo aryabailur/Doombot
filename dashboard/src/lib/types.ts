@@ -92,6 +92,8 @@ export interface HealthResponse {
    */
   measured: boolean;
   issue_count: number;
+  /** True when the issues could not be read (rate limit, network, access). */
+  unreadable: boolean;
 }
 
 export interface RepoSummary {

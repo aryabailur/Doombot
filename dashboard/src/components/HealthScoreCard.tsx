@@ -16,6 +16,8 @@ export interface HealthScoreCardProps {
    * existing callers are unaffected.
    */
   measured?: boolean
+  /** True when the issues could not be read at all -- a different message. */
+  unreadable?: boolean
   trend?: 'up' | 'down' | 'flat'
   onViewBreakdown?: () => void
   className?: string
@@ -46,6 +48,7 @@ export function HealthScoreCard({
   overallScore,
   components,
   measured = true,
+  unreadable = false,
   trend,
   onViewBreakdown,
   className,
@@ -113,7 +116,11 @@ export function HealthScoreCard({
               unmeasured ? 'text-text-muted' : band.text,
             )}
           >
-            {unmeasured ? 'no issues to measure' : band.label}
+            {unmeasured
+              ? unreadable
+                ? 'could not read issues'
+                : 'no issues to measure'
+              : band.label}
           </span>
         </div>
         {trendInfo && TrendIcon ? (
@@ -131,8 +138,9 @@ export function HealthScoreCard({
 
       {unmeasured ? (
         <p className="text-xs leading-5 text-text-muted">
-          This repository has no issues, so there is nothing to score. Health
-          appears once Doombot has issues to read.
+          {unreadable
+            ? 'Doombot could not read this repository’s issues — usually an exhausted GitHub API quota. Health returns once the quota resets.'
+            : 'This repository has no issues, so there is nothing to score. Health appears once Doombot has issues to read.'}
         </p>
       ) : components.length > 0 ? (
         <HealthMetricBreakdown compact components={components} />

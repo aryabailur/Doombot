@@ -88,6 +88,9 @@ class HealthResponse(BaseModel):
     # been able to read. Defaults keep every existing caller valid.
     measured: bool = True
     issue_count: int = 0
+    # True when the issues could not be read at all (rate limit, network,
+    # permissions) -- distinct from a repository that genuinely has none.
+    unreadable: bool = False
 
 
 class RepoSummary(BaseModel):

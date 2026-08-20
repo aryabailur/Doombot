@@ -200,6 +200,7 @@ function OverviewPage({
           <HealthScoreCard
             components={toComponents(health.data)}
             measured={health.data.measured}
+            unreadable={health.data.unreadable}
             overallScore={health.data.score}
           />
         ) : (

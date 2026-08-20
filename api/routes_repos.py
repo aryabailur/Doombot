@@ -141,6 +141,7 @@ async def get_repo_health(owner: str, repo: str) -> HealthResponse:
         history=history,
         measured=current.get("measured", True),
         issue_count=current.get("issue_count", 0),
+        unreadable=current.get("unreadable", False),
     )
 
 
