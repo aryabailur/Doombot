@@ -20,6 +20,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from mcp_server import github_client
+import sys
 
 # Maps MCP tool-name constants (mcp_server/tool_names.py) to the matching
 # mcp_server.github_client function, for mode-0 direct dispatch.
@@ -58,7 +59,7 @@ async def startup() -> None:
         return
     _exit_stack = AsyncExitStack()
     server_params = StdioServerParameters(
-        command="python",
+        command=sys.executable,
         args=["-m", "mcp_server.server"],
     )
     read_stream, write_stream = await _exit_stack.enter_async_context(

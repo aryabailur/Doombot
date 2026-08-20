@@ -6,6 +6,7 @@ from mcp import (StdioServerParameters,stdio_client)
 from mcp import ClientSession
 from langchain_core.messages import (SystemMessage,HumanMessage)
 import asyncio
+import sys
 
 load_dotenv()
 llm = ChatGroq(model="openai/gpt-oss-120b")
@@ -37,7 +38,7 @@ One paragraph summary of the PR quality and what needs to be fixed before mergin
 ])
     async def mcp_call():
         system_params=StdioServerParameters(
-            command="python",
+            command=sys.executable,
             args=["-m", "mcp_server.server"]
         )
         async with stdio_client(system_params) as(
