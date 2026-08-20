@@ -1,0 +1,75 @@
+:root {
+  --background: #070a08;
+  --surface-1: #0d120f;
+  --surface-2: #101713;
+  --surface-3: #17211b;
+  --border: #24332a;
+
+  --text-primary: #f1f5f2;
+  --text-secondary: #b6c2ba;
+  --text-muted: #87958c;
+
+  --accent: #22c55e;
+  --accent-bright: #4ade80;
+  --accent-muted: #163d25;
+
+  --critical: #f43f5e;
+  --high: #fb7185;
+  --warning: #f59e0b;
+  --information: #38bdf8;
+  --success: #22c55e;
+  --neutral: #94a3b8;
+
+  --foreground: var(--text-primary);
+  --card: var(--surface-1);
+  --card-foreground: var(--text-primary);
+  --popover: var(--surface-3);
+  --popover-foreground: var(--text-primary);
+  --primary: var(--accent);
+  --primary-foreground: var(--background);
+  --secondary: var(--surface-2);
+  --secondary-foreground: var(--text-primary);
+  --muted: var(--surface-2);
+  --muted-foreground: var(--text-muted);
+  --accent-foreground: var(--background);
+  --destructive: var(--critical);
+  --input: var(--border);
+  --ring: var(--accent-bright);
+  --chart-1: var(--accent);
+  --chart-2: var(--information);
+  --chart-3: var(--warning);
+  --chart-4: var(--high);
+  --chart-5: var(--neutral);
+  --sidebar: var(--surface-1);
+  --sidebar-foreground: var(--text-primary);
+  --sidebar-primary: var(--accent);
+  --sidebar-primary-foreground: var(--background);
+  --sidebar-accent: var(--surface-2);
+  --sidebar-accent-foreground: var(--text-primary);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--accent-bright);
+
+  --font-sans: Inter, Geist, system-ui, sans-serif;
+  --font-mono: "Geist Mono", "JetBrains Mono", ui-monospace, monospace;
+
+  --z-base: 0;
+  --z-sticky: 10;
+  --z-dropdown: 20;
+  --z-overlay: 30;
+  --z-modal: 40;
+  --z-popover: 50;
+  --z-toast: 60;
+
+  --motion-instant: 100ms;
+  --motion-fast: 150ms;
+  --motion-base: 200ms;
+  --motion-slow: 300ms;
+  --motion-ease: cubic-bezier(0.2, 0, 0, 1);
+
+  --radius: 0.625rem;
+  --radius-sm: 0.5rem;
+  --radius-md: 0.625rem;
+  --radius-lg: 0.75rem;
+  --shadow-raised: 0 1px 2px rgb(0 0 0 / 40%);
+  --shadow-overlay: 0 4px 12px rgb(0 0 0 / 50%);
+}
