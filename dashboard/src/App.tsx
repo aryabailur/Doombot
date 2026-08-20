@@ -10,7 +10,6 @@ import {
 import { AgentActivityFeed } from '@/components/AgentActivityFeed'
 import { AgentStatusIndicator } from '@/components/AgentStatusIndicator'
 import { AppShell } from '@/components/AppShell'
-import { EmptyState } from '@/components/EmptyState'
 import {
   EscalationTable,
   type EscalationFilters,
@@ -20,6 +19,7 @@ import { EscalationPreview } from '@/components/EscalationPreview'
 import { HealthMetricBreakdown } from '@/components/HealthMetricBreakdown'
 import { HealthScoreCard } from '@/components/HealthScoreCard'
 import { HealthTrendChart } from '@/components/HealthTrendChart'
+import { InvestigationList } from '@/components/InvestigationList'
 import { IssueGraph } from '@/components/IssueGraph'
 import {
   RepositorySelector,
@@ -34,6 +34,7 @@ import {
   demoHealthTrend,
   demoRepos,
 } from '@/demo/demoData'
+import { mockInvestigations } from '@/lib/mocks'
 
 /**
  * Shared app state.
@@ -184,15 +185,28 @@ function GraphPage() {
 }
 
 /**
- * Investigation routes are Stream C's surface. Placeholders here keep the
- * navigation honest -- an empty state that says what is missing beats a dead
- * link or a fabricated screen.
+ * Investigation list, now backed by Stream A's mocks.
+ *
+ * Reads from `mockInvestigations` rather than fetching, so the route works
+ * with no backend. Swapping in `listInvestigations()` from `lib/api.ts` is a
+ * one-line change once the API leaves its fixture phase.
+ *
+ * The trace itself (Stream C's `InvestigationTrace`) still needs a real
+ * investigation to stream, so the detail route stays a placeholder until the
+ * graph runner is wired.
  */
 function InvestigationsPage() {
+  const navigate = useNavigate()
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+
   return (
-    <EmptyState
-      description="The investigation list and trace are Stream C's components. They render here once wired to the API."
-      title="Investigations"
+    <InvestigationList
+      investigations={mockInvestigations}
+      onSelect={(id) => {
+        setSelectedId(id)
+        navigate(`/investigations/${id}`)
+      }}
+      selectedId={selectedId}
     />
   )
 }
