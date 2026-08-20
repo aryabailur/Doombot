@@ -70,7 +70,16 @@ export function SearchBar() {
   }
 
   return (
-    <div ref={wrapRef} className="relative min-w-0 flex-1 md:max-w-xl">
+    // No `min-w-0` here, deliberately. The toolbar is `flex flex-wrap`, and the
+    // repo selector and its three buttons do not shrink -- so with `min-w-0`
+    // flexbox was free to absorb the entire width deficit here and collapsed
+    // this to an icon-width stub, dropdown included. A hard floor plus the
+    // parent's wrapping means it takes its own row when the row is full,
+    // instead of being crushed inside it.
+    <div
+      ref={wrapRef}
+      className="relative w-full min-w-[240px] shrink-0 sm:w-auto sm:flex-1 sm:basis-64 md:max-w-xl"
+    >
       <label className="sr-only" htmlFor="repo-search">
         Search issues by meaning
       </label>
@@ -114,7 +123,12 @@ export function SearchBar() {
           that a plain-English question works at all -- an empty box looks like
           keyword search, so nobody types a sentence into it. */}
       {showExamples && !value ? (
-        <div className="absolute left-0 right-0 top-full z-50 mt-1 overflow-hidden rounded-lg border-2 border-border bg-surface-1 shadow-brutal">
+        // Sized independently of the input rather than pinned to both its
+        // edges: an example question is a sentence, and inheriting a narrow
+        // input's width wrapped every one of them one word per line. It grows
+        // to fit its content, never narrower than the input and never wider
+        // than the viewport.
+        <div className="absolute left-0 top-full z-50 mt-1 w-max min-w-full max-w-[min(26rem,85vw)] overflow-hidden rounded-lg border-2 border-border bg-surface-1 shadow-brutal">
           <p className="px-3 pt-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
             Ask in plain English
           </p>
@@ -128,7 +142,7 @@ export function SearchBar() {
                 event.preventDefault()
                 submit(example)
               }}
-              className="block w-full px-3 py-1.5 text-left text-[13px] text-text-secondary hover:bg-surface-2 hover:text-text-primary"
+              className="block w-full truncate whitespace-nowrap px-3 py-1.5 text-left text-[13px] text-text-secondary hover:bg-surface-2 hover:text-text-primary"
             >
               {example}
             </button>
