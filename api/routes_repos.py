@@ -6,6 +6,7 @@
     GET  /api/repos/{owner}/{repo}/health     -> score + breakdown + history
     GET  /api/repos/{owner}/{repo}/graph      -> issue relationship graph (F15)
     GET  /api/repos/{owner}/{repo}/source     -> one file, for the code explorer
+    GET  /api/repos/{owner}/{repo}/search     -> natural-language issue search
     GET  /api/brief/{owner}/{repo}            -> weekly brief markdown
 
 No longer the fixture phase. Health is computed from real GitHub data by
@@ -34,6 +35,7 @@ from api.schemas import (
     HealthResponse,
     IndexJobResponse,
     RepoSummary,
+    SearchResponse,
     SourceFileResponse,
 )
 from memory import repo as store
@@ -238,6 +240,41 @@ def _cached_source(repo_name: str, path: str) -> str | None:
         return get_file_content(repo_name, path)
     except Exception:
         return None
+
+
+# Upper bound on results. Past this the list stops being something a reader
+# scans and starts being something they scroll past, and every extra hit is
+# another embedding comparison and snippet pass.
+MAX_SEARCH_RESULTS = 50
+
+
+@router.get("/api/repos/{owner}/{repo}/search", response_model=SearchResponse)
+def search_repo_issues(
+    owner: str,
+    repo: str,
+    q: str = Query(..., min_length=1, description="Natural-language query"),
+    k: int = Query(20, ge=1, le=MAX_SEARCH_RESULTS),
+) -> SearchResponse:
+    """Search a repository's indexed history by meaning, not by keyword.
+
+    Three stages, in `rag/search.py`: the model translates the question into
+    search parameters, Chroma answers it with those filters applied, and the
+    hits are ranked by similarity, recency, engagement and whatever the triage
+    agent already decided about each issue.
+
+    The model never writes a result. Every issue returned is a real indexed
+    issue, and the response carries the parsed intent so a reader can see how
+    their question was interpreted rather than guessing why something is
+    missing.
+
+    Read-only. An unindexed repository is not an error: it returns zero results
+    with `stats.indexed == 0`, which is a different sentence for the UI to say
+    than "nothing matched".
+    """
+    from rag.search import search
+
+    repo_name = f"{owner}/{repo}"
+    return SearchResponse.model_validate(search(repo_name, q, k=k))
 
 
 @router.get("/api/repos/{owner}/{repo}/source", response_model=SourceFileResponse)

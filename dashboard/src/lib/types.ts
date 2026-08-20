@@ -268,6 +268,79 @@ export interface CodeGraphResponse {
   files: string[];
 }
 
+// ---------------------------------------------------------------------------
+// Semantic search. Hand-mirrored from api/schemas.py.
+// ---------------------------------------------------------------------------
+
+/**
+ * How the query was read.
+ *
+ * `understood` is false when query understanding was unavailable and only the
+ * literal text was searched. The UI has to surface that: otherwise a date
+ * filter that never ran looks exactly like one that found nothing.
+ */
+export interface SearchIntent {
+  semantic_query: string;
+  state: string | null;
+  created_after: string | null;
+  created_before: string | null;
+  labels: string[];
+  author: string | null;
+  unanswered: boolean;
+  min_reactions: number | null;
+  sort: string;
+  understood: boolean;
+  note: string;
+}
+
+/** What the triage agent already concluded about this issue, if anything. */
+export interface SearchAgentContext {
+  investigation_id: string | null;
+  decision: string | null;
+  confidence: number | null;
+  status: string | null;
+}
+
+/** One real indexed issue. No field here is generated. */
+export interface SearchResult {
+  number: number | null;
+  title: string;
+  state: string;
+  labels: string[];
+  author: string;
+  created_at: string;
+  comments: number;
+  reactions: number;
+  /** Cosine similarity to the semantic query, 0-1. */
+  score: number;
+  snippet: string;
+  /** Similarity blended with recency, engagement and agent confidence. */
+  rank_score: number;
+  agent: SearchAgentContext | null;
+}
+
+export interface SearchStats {
+  considered: number;
+  returned: number;
+  /**
+   * "in_query" when every filter ran inside the vector query;
+   * "post_filtered_dates" when the collection predates the numeric date field
+   * and the window had to be applied to an over-fetched candidate set.
+   */
+  filter_mode: string;
+  indexed: number;
+  /** Hits that matched the filters but scored below the relevance floor. */
+  below_floor: number;
+}
+
+export interface SearchResponse {
+  repo_name: string;
+  query: string;
+  intent: SearchIntent;
+  results: SearchResult[];
+  stats: SearchStats;
+}
+
 /** One repository file, read on demand for the explorer's code pane. */
 export interface SourceFile {
   path: string;

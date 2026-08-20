@@ -229,3 +229,81 @@ class SourceFileResponse(BaseModel):
     lines: int
     language: str
     truncated: bool
+
+
+# ---------------------------------------------------------------------------
+# Semantic search. Natural-language query in, real indexed issues out.
+# ---------------------------------------------------------------------------
+
+
+class SearchIntent(BaseModel):
+    """How the query was read. Returned so the UI can show its own reasoning.
+
+    `understood` is false when query understanding was unavailable and only the
+    literal text was searched -- without it, a date filter that never ran looks
+    identical to one that found nothing.
+    """
+
+    semantic_query: str
+    state: str | None = None
+    created_after: str | None = None
+    created_before: str | None = None
+    labels: list[str] = []
+    author: str | None = None
+    unanswered: bool = False
+    min_reactions: int | None = None
+    sort: str = "relevance"
+    understood: bool = False
+    note: str = ""
+
+
+class SearchAgentContext(BaseModel):
+    """What the triage agent already concluded about this issue, if anything."""
+
+    investigation_id: str | None = None
+    decision: str | None = None
+    confidence: float | None = None
+    status: str | None = None
+
+
+class SearchResult(BaseModel):
+    """One real issue. Every field comes from the index, none is generated."""
+
+    number: int | None
+    title: str
+    state: str
+    labels: list[str] = []
+    author: str
+    created_at: str
+    comments: int
+    reactions: int
+    # Cosine similarity to the semantic query, 0-1.
+    score: float
+    # The passage of the body most related to the query, chosen by word overlap.
+    snippet: str
+    # Similarity blended with recency, engagement and agent confidence.
+    rank_score: float = 0.0
+    agent: SearchAgentContext | None = None
+
+
+class SearchStats(BaseModel):
+    """How the search was executed, so a thin result set can be explained."""
+
+    considered: int
+    returned: int
+    # "in_query" when every filter ran inside the Chroma query;
+    # "post_filtered_dates" when the collection predates `created_ts` and the
+    # date window had to be applied to an over-fetched candidate set.
+    filter_mode: str
+    indexed: int
+    # Hits that matched the filters but scored below the relevance floor.
+    # Reported so a short list is not mistaken for a small index.
+    below_floor: int = 0
+
+
+class SearchResponse(BaseModel):
+    repo_name: str
+    query: str
+    intent: SearchIntent
+    results: list[SearchResult]
+    stats: SearchStats

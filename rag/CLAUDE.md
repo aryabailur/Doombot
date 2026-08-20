@@ -328,26 +328,57 @@ separation in §2.
 
 ---
 
-## 9. **CRITICAL: score direction**
+## 9. **CRITICAL: score direction** — corrected 2026-08-21
 
-Chroma exposes two different similarity APIs and they are opposite:
+Chroma exposes two similarity APIs and they point in opposite directions:
 
 | Method | Returns | Direction |
 |---|---|---|
-| `similarity_search_with_score` | L2 **distance** | **lower is better** |
-| `similarity_search_with_relevance_scores` | normalized **relevance**, roughly 0-1 | **higher is better** |
+| `similarity_search_with_score` | a **distance** | **lower is better** |
+| `similarity_search_with_relevance_scores` | normalized 0-1 | higher is better |
 
-**Use `similarity_search_with_relevance_scores`, always, everywhere in this
-package.** The thresholds in this doc and in `agents/CLAUDE.md`
-(`> 0.85` duplicate, `0.65-0.85` related) are written for a 0-1,
-higher-is-better scale. If `retrieve_with_scores` is implemented on top of
-`similarity_search_with_score` instead, those thresholds are silently
-inverted — the "most confident duplicate" result would carry the *lowest*
-number, `> 0.85` would almost never fire, and `duplicate_detector` would
-quietly stop finding real duplicates while still returning results, which
-is the worst kind of bug because nothing throws an exception. This is
-exactly the "invert an L2 distance" trap named in the task brief — do not
-introduce it.
+**This section used to mandate the relevance variant, "always, everywhere in
+this package". That instruction was wrong and has been removed. Do not
+reinstate it.** `retrieve_with_scores` calls `similarity_search_with_score` and
+converts the distance itself, on purpose:
+
+- The relevance variant does **not** return cosine. It computes
+  `1 - L2/sqrt(2)`, which compresses the scale and goes negative for distant
+  pairs. Measured on a real duplicate pair: true cosine 0.692, reported 0.445 —
+  below the 0.65 "related" cut, so a genuine duplicate was discarded. Every
+  threshold in this doc is written in cosine, so using it silently under-scores
+  every match.
+- LangChain itself warns about the negative values.
+
+**Which distance you get depends on the collection's `hnsw:space`, and this
+project has collections in both.** Calibrated by embedding pairs and computing
+cosine from the raw vectors:
+
+| pair | true cosine | default (`l2`) `d` | `cosine` space `d` |
+|---|---|---|---|
+| related issues | +0.56876 | 0.86249 | 0.43124 |
+| unrelated issues | −0.02730 | 2.05460 | 1.02730 |
+| identical text | +1.00000 | 0.00000 | 0.00000 |
+
+Reading off the exact recoveries:
+
+```
+default ("l2")  ->  Chroma returns SQUARED euclidean distance  ->  cos = 1 - d/2
+"cosine"        ->  Chroma returns cosine distance             ->  cos = 1 - d
+```
+
+The code used `1 - d*d/2`, treating the default space's
+already-squared distance as if it were plain euclidean and squaring it again.
+That agrees with the truth only at `d = 0`, which is why identical text looked
+correct while **every real query clamped to 0.0** and duplicate detection
+silently found nothing. Fixed in `cosine_from_distance`, which reads the space
+per query via `collection_space`.
+
+**The rule now:** never hardcode a distance conversion. Call
+`cosine_from_distance(distance, space)`. And never write a test that mirrors the
+formula — the old test kept a local copy and fed it a distance it derived
+itself, so it passed against a build where search returned zero for everything.
+Assert against the measured table above.
 
 ---
 
@@ -504,3 +535,52 @@ evidence.
 
 Returns empty lists rather than raising when the repo is unindexed, so the UI
 shows an empty state instead of an error.
+
+---
+
+## 14. Natural-language search (`rag/search.py`)
+
+A search bar over the same `{repo}-issues` collection. Three stages: the model
+translates the question into search parameters, Chroma answers it with those
+filters applied, and the hits are ranked. **The model never writes a result** —
+every field on every hit comes from the vector store or SQLite.
+
+Exposed as `GET /api/repos/{owner}/{repo}/search?q=...`. The MCP side already
+existed: `search_issues_mcp` (F18) is the same collection without the query
+understanding, and was deliberately left alone.
+
+### Three things that are load-bearing
+
+**Filters go in the query, except the two that cannot.** Chroma applies `where`
+before choosing the k nearest, which is what makes `state` and `comments`
+filtering correct rather than decorative. Two exceptions:
+
+- **Dates.** Range operators need numbers, and issues were indexed with
+  `created_at` as an ISO *string* (`$gte` raises "Expected operand value to be
+  an int or a float"). `index_issues` now also writes `created_ts` (epoch
+  seconds); until a repository is re-indexed the window is a post-filter over an
+  over-fetched set. Which one ran is reported as `stats.filter_mode`.
+- **Labels.** Stored comma-joined, so `$eq` would only match an issue whose
+  *entire* label set is that one label. Post-filtered per member.
+
+**Degrade, never fail.** No `GROQ_API_KEY`, a rate limit, or malformed JSON all
+fall back to searching the literal text with `understood: false` and a note. A
+search that ignores "from last month" still returns real issues; one that 500s
+returns nothing. The flag must reach the UI — a filter that never ran has to
+look different from one that matched nothing.
+
+**There is a relevance floor (`MIN_SIMILARITY = 0.05`), far below the 0.65
+duplicate threshold.** Those thresholds compare whole issue to whole issue; this
+compares an expanded query phrase against a title plus body, and real matches
+land at 0.16–0.31 on a live repository. A 0.65 floor returns nothing on every
+query. The floor exists only to stop padding: on a five-issue index, `k=20`
+otherwise returns the whole repository sorted, so a dark-mode issue shows up
+under a performance query at "0% match". Dropped hits are counted in
+`stats.below_floor` rather than hidden.
+
+### Verification
+
+```bash
+python -m pytest tests/test_search.py -q      # 43 tests, no network, no model
+```
+
