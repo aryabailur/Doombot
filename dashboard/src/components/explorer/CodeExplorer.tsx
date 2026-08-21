@@ -749,6 +749,22 @@ export function CodeExplorer({
     visible: !hiddenKinds.has(kind),
   }));
 
+  /**
+   * "mostly .go" -- the languages the parser passed over, in words.
+   *
+   * Only the extensions that actually dominate: listing every stray `.md` and
+   * `.yml` in a repository turns the explanation back into noise. Two at most,
+   * and only ones holding at least a tenth of the skipped files.
+   */
+  const skippedSummary = useMemo(() => {
+    const skipped = graph?.stats.skipped_languages ?? [];
+    if (skipped.length === 0) return "";
+    const total = skipped.reduce((sum, entry) => sum + entry.files, 0);
+    const dominant = skipped.filter((entry) => entry.files >= total * 0.1).slice(0, 2);
+    if (dominant.length === 0) return "";
+    return dominant.map((entry) => `${entry.extension} (${entry.files} files)`).join(" and ");
+  }, [graph]);
+
   const filtersActive =
     subsystem !== "" || activeRuntimes.size > 0 || minDegree > 0 || hiddenKinds.size > 0;
 
@@ -1137,13 +1153,55 @@ export function CodeExplorer({
             </p>
           </div>
         ) : data.nodes.length === 0 ? (
+          /*
+           * Three different absences, told apart.
+           *
+           * This used to say "nothing to show at this filter" for all of them.
+           * Pointed at cli/cli -- 99.6% Go -- it reported zero files and then
+           * advised lowering a filter that was not the cause, so the one
+           * actionable fact (this parser reads five suffixes and Go is not one)
+           * was the one thing not on screen.
+           */
           <div className="flex h-full flex-col items-center justify-center gap-2 px-8 text-center">
-            <p className="text-sm font-bold" style={{ color: pal.text }}>
-              Nothing to show at this filter.
-            </p>
-            <p className="text-xs" style={{ color: pal.mutedText }}>
-              Lower “min connections” in Settings, or clear the subsystem filter.
-            </p>
+            {(graph?.files.length ?? 0) === 0 ? (
+              <>
+                <p className="text-sm font-bold" style={{ color: pal.text }}>
+                  No source the code graph can read.
+                </p>
+                <p className="max-w-md text-xs leading-relaxed" style={{ color: pal.mutedText }}>
+                  It parses Python, JavaScript and TypeScript
+                  <span className="font-mono"> (.py .js .jsx .ts .tsx)</span>.
+                  {skippedSummary
+                    ? ` ${repoName} is mostly ${skippedSummary}, which it does not read yet.`
+                    : ` It found none of those in ${repoName}.`}
+                </p>
+                <p className="mt-1 max-w-md text-xs" style={{ color: pal.dimText }}>
+                  The Issues graph does not depend on parsing source — try that
+                  tab instead.
+                </p>
+              </>
+            ) : (graph?.nodes.length ?? 0) === 0 ? (
+              <>
+                <p className="text-sm font-bold" style={{ color: pal.text }}>
+                  Read {graph?.files.length} files, found no symbols.
+                </p>
+                <p className="max-w-md text-xs" style={{ color: pal.mutedText }}>
+                  The files parsed but declared no functions, classes or
+                  components — generated code and re-export barrels look like
+                  this.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-sm font-bold" style={{ color: pal.text }}>
+                  Nothing to show at this filter.
+                </p>
+                <p className="text-xs" style={{ color: pal.mutedText }}>
+                  {graph?.nodes.length} symbols are hidden. Lower “min
+                  connections” in Settings, or clear the subsystem filter.
+                </p>
+              </>
+            )}
           </div>
         ) : mode === "flowchart" ? (
           <FlowchartSvg

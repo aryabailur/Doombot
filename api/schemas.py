@@ -200,6 +200,13 @@ class CodeGraphImpact(BaseModel):
     suggested_labels: list[str]
 
 
+class SkippedLanguage(BaseModel):
+    """An extension present in the repository that the parser does not read."""
+
+    extension: str
+    files: int
+
+
 class CodeGraphStats(BaseModel):
     node_count: int
     link_count: int
@@ -207,6 +214,8 @@ class CodeGraphStats(BaseModel):
     clusters: list[str]
     languages: list[str]
     attribution: str
+    # Why an empty graph is empty. Defaulted, so an older payload validates.
+    skipped_languages: list[SkippedLanguage] = []
 
 
 class CodeGraphResponse(BaseModel):

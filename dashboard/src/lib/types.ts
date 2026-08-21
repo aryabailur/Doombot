@@ -242,6 +242,12 @@ export interface CodeGraphImpact {
   suggested_labels: string[];
 }
 
+/** An extension present in the repository that the parser does not read. */
+export interface SkippedLanguage {
+  extension: string;
+  files: number;
+}
+
 export interface CodeGraphStats {
   node_count: number;
   link_count: number;
@@ -249,6 +255,8 @@ export interface CodeGraphStats {
   clusters: string[];
   languages: string[];
   attribution: string;
+  /** Why an empty graph is empty: what the parser passed over, commonest first. */
+  skipped_languages: SkippedLanguage[];
 }
 
 export interface CodeGraphResponse {

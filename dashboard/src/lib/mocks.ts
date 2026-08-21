@@ -289,6 +289,9 @@ export const mockCodeGraph: CodeGraphResponse = {
     cluster_count: 6,
     clusters: ["agents", "agents/triage", "rag", "api", "dashboard/lib", "dashboard/components"],
     languages: ["python", "typescript"],
+    // Empty because this mock graph has nodes: the field only explains an
+    // empty graph, and a value here would describe a state the mock never reaches.
+    skipped_languages: [],
     attribution: "Semantic graph adapted from GraphDev (MIT) for Doombot F15.",
   },
   impact: {

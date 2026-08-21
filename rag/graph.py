@@ -22,7 +22,7 @@ import ast
 import hashlib
 import itertools
 import math
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import PurePosixPath
 import re
@@ -846,8 +846,11 @@ def _impact_overlay(nodes: list[dict], links: list[dict], changed_paths: set[str
     }
 
 
-def _fetch_code_files(repo_name: str) -> dict[str, str]:
+def _fetch_code_files(repo_name: str) -> tuple[dict[str, str], "Counter[str]"]:
     """Read source files for the semantic graph, bounded.
+
+    Returns the sources it read plus a tally of the file extensions it
+    declined, so an empty result can say why it is empty.
 
     GitHub has no bulk file-content endpoint, so this is one request per file.
     Unbounded, that is both the slowest and most expensive operation in the
@@ -861,12 +864,26 @@ def _fetch_code_files(repo_name: str) -> dict[str, str]:
     """
     from mcp_server.github_client import get_file_content, get_repo_files
 
+    every_path = [path for path in get_repo_files(repo_name) if not _is_vendored(path)]
     candidates = [
         path
-        for path in get_repo_files(repo_name)
+        for path in every_path
         if PurePosixPath(path).suffix.lower() in _CODE_SUFFIXES
-        and not _is_vendored(path)
     ]
+
+    # What we passed over, most common first.
+    #
+    # An empty graph is indistinguishable from a broken one without this. The
+    # parser reads five suffixes; point it at cli/cli -- 99.6% Go -- and it
+    # returns nothing at all, with no way for the reader to tell that from a
+    # failed fetch or an over-tight filter. Reporting the extensions it declined
+    # turns a dead end into a sentence: "this repository is Go, which is not
+    # read yet".
+    skipped: Counter[str] = Counter()
+    for path in every_path:
+        suffix = PurePosixPath(path).suffix.lower()
+        if suffix and suffix not in _CODE_SUFFIXES:
+            skipped[suffix] += 1
     # Shallower paths first: a repo's real entry points live near the root,
     # while deep paths are usually tests, fixtures, or examples.
     candidates.sort(key=lambda path: (path.count("/"), path))
@@ -891,7 +908,7 @@ def _fetch_code_files(repo_name: str) -> dict[str, str]:
         for path, content in pool.map(read, selected):
             if content is not None:
                 result[path] = content
-    return result
+    return result, skipped
 
 
 def build_code_graph(
@@ -908,8 +925,12 @@ def build_code_graph(
     skipped; an unavailable repository returns an empty graph with an error-safe
     stats object instead of leaking an exception to the dashboard.
     """
+    skipped: "Counter[str]" = Counter()
     try:
-        source_files = dict(files) if files is not None else _fetch_code_files(repo_name)
+        if files is not None:
+            source_files = dict(files)
+        else:
+            source_files, skipped = _fetch_code_files(repo_name)
     except Exception:
         source_files = {}
 
@@ -1001,6 +1022,12 @@ def build_code_graph(
             "clusters": clusters,
             "languages": sorted({unit["language"] for unit in units}),
             "attribution": _GRAPHDEV_ATTRIBUTION,
+            # Extensions present in the repository that this parser does not
+            # read, most common first. The explanation for an empty graph.
+            "skipped_languages": [
+                {"extension": ext, "files": count}
+                for ext, count in skipped.most_common(6)
+            ],
         },
         "impact": impact,
     }
