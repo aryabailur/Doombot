@@ -156,10 +156,13 @@ def select_target_file(files: list[dict], issue_text: str) -> dict:
     Non-test files above `fix_snippet.HUNK_RELEVANCE_THRESHOLD` are the ones
     that count toward "how many files does this fix touch": more than one
     means the fix is genuinely multi-file and is rejected. Exactly one is the
-    target; a fix confined to test files alone (no source file cleared the
-    bar) still names the single highest-scoring test file as the target,
-    since AUTO_FIX.md's guardrail is about the *number* of files, not about
-    which kind of file it is.
+    target.
+
+    A fix confined to test files alone -- no source file cleared the bar -- is
+    also rejected. AUTO_FIX.md's guardrail is phrased in terms of the number of
+    files, but replaying a test-only change would open a pull request that edits
+    an assertion and repairs nothing, presented with the same confidence as a
+    real fix. That is the failure this module exists to refuse.
 
     Returns `{"file", "hunks", "relevance", "changed_lines", "reason"}` where
     `reason` is `None` on success and a human sentence otherwise. On
@@ -671,7 +674,10 @@ def auto_fix_issue(repo_name: str, issue_number: int, source_pr: int | None = No
     """
     try:
         if not issue_text or not issue_title:
-            from mcp_server.github_client import get_issue
+            # get_issue_text, not get_issue: the full triage shape costs a
+            # second round trip to count participants exactly, and nothing
+            # here reads that field.
+            from mcp_server.github_client import get_issue_text as get_issue
 
             try:
                 issue = get_issue(repo_name, issue_number)

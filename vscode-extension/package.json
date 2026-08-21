@@ -1,8 +1,9 @@
 {
   "name": "doombot",
   "displayName": "Doombot",
-  "description": "Agentic open-source maintainer assistant \u2014 companion view for the Doombot dashboard.",
-  "version": "0.1.0",
+  "publisher": "doombot",
+  "description": "Agentic open-source maintainer assistant — companion view for the Doombot dashboard.",
+  "version": "0.2.0",
   "private": true,
   "engines": {
     "vscode": "^1.85.0"

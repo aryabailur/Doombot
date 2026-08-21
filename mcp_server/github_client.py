@@ -56,6 +56,32 @@ def _get_client() -> Github:
     return _client
 
 
+#: repo_name -> PyGithub Repository handle, for the lifetime of the process.
+_repos: dict = {}
+
+
+def _repo(repo_name: str):
+    """The cached `Repository` handle for `repo_name`.
+
+    `get_repo` is a real API round trip -- measured at 0.6s here -- and almost
+    every helper in this module opened with one. A single auto-fix run made
+    twelve of them for the same repository, about six seconds spent re-fetching
+    an object that had not changed. Caching the handle removes that entirely.
+
+    Safe because a `Repository` is a handle, not a snapshot: PyGithub fetches
+    and caches each attribute on access, and the mutating calls below (create a
+    ref, update a file, open a pull request) all go straight to the API rather
+    than reading local state. The tradeoff is that a repository renamed or
+    transferred mid-process keeps resolving to the old handle until restart,
+    which is the right trade for a long-lived API process serving one repo.
+    """
+    repo = _repos.get(repo_name)
+    if repo is None:
+        repo = _get_client().get_repo(repo_name)
+        _repos[repo_name] = repo
+    return repo
+
+
 def git_initialization(repo_name,pr_number):
     g=_get_client()
     repo=g.get_repo(repo_name)
@@ -236,6 +262,22 @@ def get_issue(repo_name: str, issue_number: int) -> dict:
     return _issue_dict(issue)
 
 
+def get_issue_text(repo_name: str, issue_number: int) -> dict:
+    """Just an issue's title and body -> {"number", "title", "body"}.
+
+    `get_issue` above returns the full triage shape, and computing its exact
+    `participants` count means listing every comment -- a second round trip,
+    measured at 1.8s total. Auto-fix only needs the text to score a diff's
+    relevance against, so it pays for the title and body and nothing else.
+    """
+    issue = _repo(repo_name).get_issue(issue_number)
+    return {
+        "number": issue.number,
+        "title": issue.title,
+        "body": issue.body or "",
+    }
+
+
 def get_issues(repo_name: str, state: str = "open", limit: int = 100) -> list[dict]:
     """List up to `limit` issues for repo_name filtered by state
     ('open'/'closed'/'all'). Same per-issue dict shape as get_issue.
@@ -317,9 +359,7 @@ def get_issues(repo_name: str, state: str = "open", limit: int = 100) -> list[di
 
 def post_issue_comment(repo_name: str, issue_number: int, comment: str) -> str:
     """Post a comment on the issue. Return the created comment's body."""
-    g = _get_client()
-    repo = g.get_repo(repo_name)
-    issue = repo.get_issue(issue_number)
+    issue = _repo(repo_name).get_issue(issue_number)
     created = issue.create_comment(comment)
     return created.body
 
@@ -356,9 +396,7 @@ def get_default_branch(repo_name: str) -> str:
     "master" or on something else entirely -- reading `default_branch` off
     the repo itself removes the guess.
     """
-    g = _get_client()
-    repo = g.get_repo(repo_name)
-    return repo.default_branch
+    return _repo(repo_name).default_branch
 
 
 def get_file_at_ref(repo_name: str, file_path: str, ref: str | None = None) -> dict:
@@ -373,8 +411,7 @@ def get_file_at_ref(repo_name: str, file_path: str, ref: str | None = None) -> d
     string would make the caller commit real data loss with nothing in the
     return value to indicate it went wrong.
     """
-    g = _get_client()
-    repo = g.get_repo(repo_name)
+    repo = _repo(repo_name)
     # `ref=None` is not the same as omitting it: PyGithub asserts the argument
     # is NotSet or a str, so passing None explicitly raises an AssertionError
     # rather than defaulting to the repository's HEAD.
@@ -406,8 +443,7 @@ def create_branch(repo_name: str, branch: str, base_branch: str | None = None) -
     turned into `created: False` with the branch's current sha; any other
     status is a real failure and is left to raise.
     """
-    g = _get_client()
-    repo = g.get_repo(repo_name)
+    repo = _repo(repo_name)
     base = base_branch or repo.default_branch
     base_sha = repo.get_branch(base).commit.sha
 
@@ -429,8 +465,7 @@ def commit_file(repo_name: str, file_path: str, content: str, message: str,
     instead of silently overwriting whatever is there now. Returns the new
     commit sha.
     """
-    g = _get_client()
-    repo = g.get_repo(repo_name)
+    repo = _repo(repo_name)
     result = repo.update_file(file_path, message, content, sha, branch=branch)
     return result["commit"].sha
 
@@ -447,8 +482,7 @@ def find_open_pull_request_for_branch(repo_name: str, branch: str) -> dict | Non
     `repo_name` as given, so this still works after a repository transfer or
     rename.
     """
-    g = _get_client()
-    repo = g.get_repo(repo_name)
+    repo = _repo(repo_name)
     owner = repo.full_name.split("/")[0]
     pulls = repo.get_pulls(state="open", head=f"{owner}:{branch}")
     for pr in pulls:
@@ -469,8 +503,7 @@ def create_draft_pull_request(repo_name: str, title: str, body: str,
     falling back to ready-for-review is exactly the behavior this function
     must never have.
     """
-    g = _get_client()
-    repo = g.get_repo(repo_name)
+    repo = _repo(repo_name)
     base_branch = base or repo.default_branch
     pr = repo.create_pull(title=title, body=body, head=head, base=base_branch, draft=True)
     return {"number": pr.number, "url": pr.html_url, "draft": pr.draft}
@@ -492,8 +525,7 @@ def has_ci_workflows(repo_name: str) -> bool:
     would trade the whole feature for a footnote.
     """
     try:
-        repo = _get_client().get_repo(repo_name)
-        contents = repo.get_contents(".github/workflows")
+        contents = _repo(repo_name).get_contents(".github/workflows")
     except UnknownObjectException:
         return False
     except Exception:
