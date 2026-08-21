@@ -346,16 +346,19 @@ independent of which client mode is active):
 npx @modelcontextprotocol/inspector python -m mcp_server.server
 ```
 
-Open the Inspector UI and confirm **16** tools are listed: the 9 GitHub
+Open the Inspector UI and confirm **17** tools are listed: the 9 GitHub
 passthroughs (`get_pullRequest_files`, `get_file_content_mcp`,
 `get_pr_details_mcp`, `post_review_comment_mcp`, `get_issue_mcp`,
 `get_issues_mcp`, `post_issue_comment_mcp`, `get_issue_comments_mcp`,
-`add_labels_mcp`) plus the 7 intelligence tools in §4b. Call one read-only
+`add_labels_mcp`), the 7 intelligence tools in §4b, and
+`auto_fix_issue_mcp` from §4c. Call one read-only
 tool (e.g. `get_issue_mcp`) against a real public repo to confirm the
 response shape.
 
 The intelligence tools need no network, so they are the cheapest thing to
 demo: `get_escalations_mcp` and `list_investigations_mcp` read SQLite only.
+Do **not** call `auto_fix_issue_mcp` to try the surface out -- it is the one
+registered tool that opens a real pull request (§4c).
 
 **Direct Python call** (validates `github_client.py` functions without MCP
 in the loop at all):
