@@ -39,8 +39,27 @@
       {
         "command": "doombot.refreshEscalations",
         "title": "Doombot: Refresh Escalations"
+      },
+      {
+        "command": "doombot.openFixPr",
+        "title": "Doombot: Open Auto-Fix PR",
+        "icon": "$(git-pull-request)"
       }
     ],
+    "menus": {
+      "view/item/context": [
+        {
+          "command": "doombot.openFixPr",
+          "when": "viewItem == doombot.investigation || viewItem == doombot.escalation",
+          "group": "inline"
+        },
+        {
+          "command": "doombot.openFixPr",
+          "when": "viewItem == doombot.investigation || viewItem == doombot.escalation",
+          "group": "doombot@1"
+        }
+      ]
+    },
     "viewsContainers": {
       "activitybar": [
         {
