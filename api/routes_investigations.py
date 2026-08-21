@@ -5,6 +5,7 @@
     GET  /api/investigations              -> list, newest first, ?repo_name= to scope
     GET  /api/investigations/{id}         -> detail + steps replayed from SQLite
     GET  /api/escalations                 -> escalation queue, ?repo_name= to scope
+    POST /api/investigations/{id}/autofix -> replay a known fix as a draft PR
 
 No longer the fixture phase: every route reads SQLite. The actual streaming
 lives in `api/runner.py`, which fans each step to both the database and the
@@ -22,6 +23,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 
 from api import runner, ws
 from api.schemas import (
+    AutoFixResponse,
     CreateInvestigationRequest,
     Escalation,
     Evidence,
@@ -395,3 +397,88 @@ async def list_escalations(
             )
         )
     return items
+
+
+def _source_fix_pr(investigation_id: str) -> int | None:
+    """The pull request whose diff an auto-fix would replay, read back from the trace.
+
+    Nothing stores this in a column, and it does not need one: the graph
+    already recorded it as evidence, and the chain is the durable record of
+    what the agent found. `patch_checker` is preferred over `resolver` because
+    it is the step that actually resolved the fix PR against the current
+    codebase -- if both ran, its number is the one the applicability check
+    used.
+
+    Only `pr`-type evidence counts. Both steps also emit `rule` entries
+    explaining why they found nothing, and reading a `ref` off one of those
+    would turn "no fix PR" into a request for pull request #0.
+    """
+    steps = {step["name"]: step for step in repo.get_steps(investigation_id)}
+
+    for name in ("patch_checker", "resolver"):
+        step = steps.get(name)
+        if not step:
+            continue
+        evidence = step.get("evidence")
+        if isinstance(evidence, str):
+            try:
+                evidence = json.loads(evidence)
+            except json.JSONDecodeError:
+                continue
+        for item in evidence or []:
+            if item.get("type") != "pr":
+                continue
+            try:
+                return int(str(item.get("ref")).strip())
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+@router.post(
+    "/api/investigations/{investigation_id}/autofix", response_model=AutoFixResponse
+)
+async def open_auto_fix_pr(investigation_id: str) -> AutoFixResponse:
+    """Replay this investigation's known fix as a draft pull request.
+
+    The on-demand half of the auto-fix feature. The graph opens a PR by itself
+    only when DOOMBOT_AUTO_FIX=1; this endpoint is what a maintainer hits when
+    they have read the investigation and want the patch. A person asking for it
+    is its own authorization, so the DOOMBOT_AUTO_FIX flag is deliberately not
+    consulted here -- only DEMO_MODE, which must be able to make the whole
+    product inert against a live repository during a rehearsal.
+
+    Runs the work in a thread: it is several GitHub round trips, and blocking
+    the event loop would stall every WebSocket client watching a live trace.
+    Unlike POST /api/investigations this is *not* a background task -- the
+    caller is a human waiting on a yes/no answer, and there is nowhere else for
+    the answer to arrive.
+    """
+    row = repo.get_investigation(investigation_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="investigation not found")
+
+    if row["kind"] != "issue":
+        # A pull request review has no past fix to replay. Answered as a
+        # refusal rather than a 400: the caller asked a reasonable question and
+        # the reason is the useful part of the reply.
+        return AutoFixResponse(
+            status="not_applicable",
+            reason="Auto-fix replays a past fix onto an issue; this investigation is a pull request review.",
+        )
+
+    from agents.triage.auto_fix import auto_fix_issue, writes_allowed
+
+    if not writes_allowed():
+        return AutoFixResponse(
+            status="blocked",
+            reason="DEMO_MODE=1 — nothing is written to GitHub. Unset it to open a draft fix PR.",
+        )
+
+    result = await asyncio.to_thread(
+        auto_fix_issue,
+        row["repo_name"],
+        row["number"],
+        _source_fix_pr(investigation_id),
+    )
+    return AutoFixResponse(**result)
