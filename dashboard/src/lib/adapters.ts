@@ -50,6 +50,7 @@ function toEvidenceRef(ev: Evidence): EvidenceRef {
     similarity: ev.type === "duplicate" || ev.type === "issue" ? ev.score : undefined,
     relevance: ev.type === "pr" ? ev.score : undefined,
     score: ev.score,
+    rawType: ev.type,
   };
 }
 

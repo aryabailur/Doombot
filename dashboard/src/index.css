@@ -404,3 +404,17 @@
   animation: flow-label-lift 0.5s ease-out both;
   animation-delay: var(--flow-delay, 0ms);
 }
+
+/* ===== Evidence graph — selection pulse ===== */
+/* An expanding, fading ring drawn around an evidence node the instant it's
+   selected — a one-shot confirmation flourish, not a loop. Applied to a
+   duplicate outline rect layered behind the real node. */
+@keyframes evidence-select-pulse {
+  0% { transform: scale(1); opacity: 0.65; }
+  100% { transform: scale(1.18); opacity: 0; }
+}
+.animate-evidence-pulse {
+  animation: evidence-select-pulse 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+  transform-box: fill-box;
+  transform-origin: center;
+}

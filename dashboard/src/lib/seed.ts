@@ -15,6 +15,13 @@ export interface EvidenceRef {
    * impact, etc) so overall evidence strength can be computed honestly.
    * Optional because seed/demo fixtures predate this field. */
   score?: number;
+  /** The real backend evidence.type ("issue"|"duplicate"|"impact"|"security"|
+   * "label"|"decision"), before it's collapsed into the coarser `kind`
+   * union above. Lets UI that wants to distinguish e.g. a security-keyword
+   * match from an impact signal do so honestly instead of showing the same
+   * generic "decision" label for every non-issue/pr evidence entry.
+   * Optional because seed/demo fixtures predate this field. */
+  rawType?: string;
 }
 
 export interface AgentStep {
