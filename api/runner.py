@@ -72,7 +72,34 @@ async def run_investigation(
         async for mode, chunk in issue_app.astream(
             state, stream_mode=["custom", "updates"]
         ):
-            if mode != "custom":
+            if mode == "updates":
+                # Accumulate the final state as the run happens, rather than
+                # asking for it afterwards.
+                #
+                # This used to end with `final = await issue_app.ainvoke(state)`,
+                # which executes the ENTIRE graph a second time -- every Groq
+                # call, every GitHub read, every node. Confirmed with a counter
+                # node: after astream it had run once, after ainvoke twice. The
+                # writes were idempotent (the decider recognises its own comment
+                # marker, auto-fix finds its own open pull request) so nothing
+                # was duplicated, which is exactly why it went unnoticed -- it
+                # only ever cost twice the time and twice the rate-limit budget.
+                #
+                # `updates` yields {node_name: patch}, which is what the node
+                # returned, so merging them in order reconstructs the same state
+                # ainvoke would have produced.
+                for patch in (chunk or {}).values():
+                    for key, value in (patch or {}).items():
+                        if key == "chain":
+                            # `chain` is Annotated[list, add] in GraphState, so
+                            # it accumulates rather than being replaced. Every
+                            # other field is last-write-wins, LangGraph's
+                            # default. Overwriting here would leave `final`
+                            # holding only the last node's single record and
+                            # break step_ts below.
+                            final.setdefault("chain", []).extend(value or [])
+                        else:
+                            final[key] = value
                 continue
 
             step = chunk.get("data")
@@ -91,8 +118,6 @@ async def run_investigation(
                     logger.exception("failed to persist step %s", step.get("step_id"))
 
             await ws.broadcast(chunk)
-
-        final = await issue_app.ainvoke(state)
 
     except Exception as exc:
         logger.exception("investigation %s failed", investigation_id)
