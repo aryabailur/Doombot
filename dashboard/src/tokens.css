@@ -1,56 +1,119 @@
+/*
+ * "Calm Control Room", dark.
+ *
+ * Ported from the `mayank` branch's design system, which is light-only:
+ * `--background: #f3f2ee` on cream, one `:root`, no dark variant. So the hues,
+ * the soft companion fills, the flat offset shadows and the type pairing come
+ * from there verbatim; the surface ramp is derived here.
+ *
+ * Two decisions in that derivation, both deliberate:
+ *
+ * - **The neutrals are warm, not green.** mayank's background is a warm cream,
+ *   and its orange-red accent is tuned against that. Dropping the same accent
+ *   onto the previous green-black surfaces made it read as an error state. The
+ *   ramp below is warm-grey so #ff5a36 reads as the brand colour it is.
+ * - **The `-soft` companions become alpha tints, not new hex values.** In the
+ *   light theme they are pastels (`--accent-soft: #ffe4da`) sitting behind
+ *   coloured text. A pastel on a dark surface is a bright block, so each one is
+ *   the accent at low alpha instead. That composites correctly over any surface
+ *   in the ramp, which a fixed hex would not.
+ *
+ * Token *names* are unchanged from the previous palette on purpose: the
+ * dashboard has 300+ token-class usages, so redefining values here restyles
+ * nearly all of it without touching a component. `src/components/explorer/`
+ * is not affected either way -- it carries its own palette in `theme.ts`
+ * because it is a canvas surface with its own light/dark toggle.
+ */
+
 :root {
-  --background: #070a08;
-  --surface-1: #0d120f;
-  --surface-2: #101713;
-  --surface-3: #17211b;
-  --border: #24332a;
+  /* Surfaces: warm near-black, lifting toward the reader. */
+  --background: #131210;
+  --surface-1: #1c1a16;
+  --surface-2: #22201b;
+  --surface-3: #2b2822;
+  --border: #332f28;
 
-  --text-primary: #f1f5f2;
-  --text-secondary: #b6c2ba;
-  --text-muted: #87958c;
+  /* mayank's --ink / --muted, inverted across the warm axis. */
+  --text-primary: #f4f2ec;
+  --text-secondary: #b8b2a6;
+  --text-muted: #8b8578;
 
-  --accent: #22c55e;
-  --accent-bright: #4ade80;
-  --accent-muted: #163d25;
+  /*
+   * Brand and status hues from mayank, lifted where a light-theme value is too
+   * dim to read as text on a dark surface. `--info: #246bfe` in particular
+   * fails contrast against #1c1a16 and is raised to #4d86ff; the rest move
+   * only slightly.
+   */
+  --accent: #ff5a36;
+  --accent-bright: #ff7d5c;
+  --accent-muted: #4a2016;
 
-  --critical: #f43f5e;
-  --high: #fb7185;
-  --warning: #f59e0b;
-  --information: #38bdf8;
-  --success: #22c55e;
-  --neutral: #94a3b8;
+  --info: #4d86ff;
+  --information: #4d86ff;
+  --success: #25c489;
+  --warning: #f0b93f;
+  --danger: #f2585d;
+  --critical: #f2585d;
+  --high: #ff8a5c;
+  --security: #ff7d4d;
+  --neutral: #9a9384;
 
+  /*
+   * The soft fills. Alpha tints of the hue above, for badge and chip
+   * backgrounds -- the light theme's pastel companions.
+   */
+  --accent-soft: rgb(255 90 54 / 14%);
+  --info-soft: rgb(77 134 255 / 14%);
+  --success-soft: rgb(37 196 137 / 14%);
+  --warning-soft: rgb(240 185 63 / 14%);
+  --danger-soft: rgb(242 88 93 / 14%);
+  --security-soft: rgb(255 125 77 / 14%);
+
+  /* mayank's two decorative tints, as tints rather than pastels. */
+  --mint: rgb(37 196 137 / 10%);
+  --lilac: rgb(140 130 255 / 12%);
+
+  /* Aliases the shadcn-shaped primitives in components/ui read. */
   --foreground: var(--text-primary);
   --card: var(--surface-1);
   --card-foreground: var(--text-primary);
   --popover: var(--surface-3);
   --popover-foreground: var(--text-primary);
   --primary: var(--accent);
-  --primary-foreground: var(--background);
+  --primary-foreground: #1a0d08;
   --secondary: var(--surface-2);
   --secondary-foreground: var(--text-primary);
   --muted: var(--surface-2);
   --muted-foreground: var(--text-muted);
-  --accent-foreground: var(--background);
+  --accent-foreground: #1a0d08;
   --destructive: var(--critical);
   --input: var(--border);
   --ring: var(--accent-bright);
+
+  /* Chart series, ordered so adjacent series stay distinguishable. */
   --chart-1: var(--accent);
-  --chart-2: var(--information);
-  --chart-3: var(--warning);
-  --chart-4: var(--high);
+  --chart-2: var(--info);
+  --chart-3: var(--success);
+  --chart-4: var(--warning);
   --chart-5: var(--neutral);
+
   --sidebar: var(--surface-1);
   --sidebar-foreground: var(--text-primary);
   --sidebar-primary: var(--accent);
-  --sidebar-primary-foreground: var(--background);
+  --sidebar-primary-foreground: #1a0d08;
   --sidebar-accent: var(--surface-2);
   --sidebar-accent-foreground: var(--text-primary);
   --sidebar-border: var(--border);
   --sidebar-ring: var(--accent-bright);
 
-  --font-sans: Inter, Geist, system-ui, sans-serif;
-  --font-mono: "Geist Mono", "JetBrains Mono", ui-monospace, monospace;
+  /*
+   * mayank's type pairing. Inter for UI, JetBrains Mono for anything a reader
+   * might compare character by character -- issue numbers, scores, file paths.
+   * Geist stays as a fallback because it is already bundled locally, so a
+   * blocked Google Fonts request degrades instead of falling back to Arial.
+   */
+  --font-sans: Inter, Geist, ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Geist Mono", ui-monospace, monospace;
 
   --z-base: 0;
   --z-sticky: 10;
@@ -66,10 +129,27 @@
   --motion-slow: 300ms;
   --motion-ease: cubic-bezier(0.2, 0, 0, 1);
 
-  --radius: 0.625rem;
+  /* Slightly larger than before, matching mayank's rounded-xl surfaces. */
+  --radius: 0.75rem;
   --radius-sm: 0.5rem;
-  --radius-md: 0.625rem;
-  --radius-lg: 0.75rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
+
+  /*
+   * The flat offset shadows are the signature of this system: hard edges, no
+   * blur. mayank offsets a near-black at 90% against cream; on these surfaces
+   * that needs to be true black to register at all, so the alpha goes up rather
+   * than the colour changing.
+   *
+   * `shadow-brutal` and `shadow-brutal-sm` were already used in ten places in
+   * this dashboard and defined in none of them -- dead classes rendering no
+   * shadow, which is a large part of why the surfaces read as flat.
+   */
+  --shadow-color: rgb(0 0 0 / 55%);
+  --shadow-flat-sm: 2px 2px 0 0 var(--shadow-color);
+  --shadow-flat: 3px 3px 0 0 var(--shadow-color);
+  --shadow-flat-lg: 6px 6px 0 0 var(--shadow-color);
+
   --shadow-raised: 0 1px 2px rgb(0 0 0 / 40%);
-  --shadow-overlay: 0 4px 12px rgb(0 0 0 / 50%);
+  --shadow-overlay: 0 8px 24px rgb(0 0 0 / 55%);
 }

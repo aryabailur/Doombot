@@ -1,8 +1,9 @@
 {
   "name": "doombot",
   "displayName": "Doombot",
-  "description": "Agentic open-source maintainer assistant \u2014 companion view for the Doombot dashboard.",
-  "version": "0.1.0",
+  "publisher": "doombot",
+  "description": "Agentic open-source maintainer assistant — companion view for the Doombot dashboard.",
+  "version": "0.2.0",
   "private": true,
   "engines": {
     "vscode": "^1.85.0"
@@ -16,6 +17,10 @@
   ],
   "contributes": {
     "commands": [
+      {
+        "command": "doombot.searchIssues",
+        "title": "Doombot: Search Issues"
+      },
       {
         "command": "doombot.openDashboard",
         "title": "Doombot: Open Dashboard"
@@ -35,8 +40,27 @@
       {
         "command": "doombot.refreshEscalations",
         "title": "Doombot: Refresh Escalations"
+      },
+      {
+        "command": "doombot.openFixPr",
+        "title": "Doombot: Open Auto-Fix PR",
+        "icon": "$(git-pull-request)"
       }
     ],
+    "menus": {
+      "view/item/context": [
+        {
+          "command": "doombot.openFixPr",
+          "when": "viewItem == doombot.investigation || viewItem == doombot.escalation",
+          "group": "inline"
+        },
+        {
+          "command": "doombot.openFixPr",
+          "when": "viewItem == doombot.investigation || viewItem == doombot.escalation",
+          "group": "doombot@1"
+        }
+      ]
+    },
     "viewsContainers": {
       "activitybar": [
         {
@@ -82,7 +106,72 @@
           "description": "How often to refresh escalations and health."
         }
       }
-    }
+    },
+    "colors": [
+      {
+        "id": "doombot.critical",
+        "description": "A critical escalation.",
+        "defaults": {
+          "dark": "#f2585d",
+          "light": "#e5484d",
+          "highContrast": "errorForeground"
+        }
+      },
+      {
+        "id": "doombot.high",
+        "description": "A high-severity escalation.",
+        "defaults": {
+          "dark": "#ff8a5c",
+          "light": "#ff6b35",
+          "highContrast": "editorWarning.foreground"
+        }
+      },
+      {
+        "id": "doombot.warning",
+        "description": "A warning-level escalation.",
+        "defaults": {
+          "dark": "#f0b93f",
+          "light": "#e7a928",
+          "highContrast": "editorWarning.foreground"
+        }
+      },
+      {
+        "id": "doombot.info",
+        "description": "An informational escalation.",
+        "defaults": {
+          "dark": "#4d86ff",
+          "light": "#246bfe",
+          "highContrast": "editorInfo.foreground"
+        }
+      },
+      {
+        "id": "doombot.success",
+        "description": "A completed investigation.",
+        "defaults": {
+          "dark": "#25c489",
+          "light": "#19a974",
+          "highContrast": "editorInfo.foreground"
+        }
+      },
+      {
+        "id": "doombot.accent",
+        "description": "Doombot's brand accent.",
+        "defaults": {
+          "dark": "#ff5a36",
+          "light": "#ff5a36",
+          "highContrast": "editorInfo.foreground"
+        }
+      },
+      {
+        "id": "doombot.muted",
+        "description": "An item with nothing to report.",
+        "defaults": {
+          "dark": "#8b8578",
+          "light": "#737373",
+          "highContrast": "descriptionForeground"
+        }
+      }
+    ]
   },
   "scripts": {
     "compile": "tsc -p ./",

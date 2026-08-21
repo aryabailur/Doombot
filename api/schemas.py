@@ -200,6 +200,13 @@ class CodeGraphImpact(BaseModel):
     suggested_labels: list[str]
 
 
+class SkippedLanguage(BaseModel):
+    """An extension present in the repository that the parser does not read."""
+
+    extension: str
+    files: int
+
+
 class CodeGraphStats(BaseModel):
     node_count: int
     link_count: int
@@ -207,6 +214,8 @@ class CodeGraphStats(BaseModel):
     clusters: list[str]
     languages: list[str]
     attribution: str
+    # Why an empty graph is empty. Defaulted, so an older payload validates.
+    skipped_languages: list[SkippedLanguage] = []
 
 
 class CodeGraphResponse(BaseModel):
@@ -229,3 +238,159 @@ class SourceFileResponse(BaseModel):
     lines: int
     language: str
     truncated: bool
+
+
+# ---------------------------------------------------------------------------
+# Semantic search. Natural-language query in, real indexed issues out.
+# ---------------------------------------------------------------------------
+
+
+class SearchIntent(BaseModel):
+    """How the query was read. Returned so the UI can show its own reasoning.
+
+    `understood` is false when query understanding was unavailable and only the
+    literal text was searched -- without it, a date filter that never ran looks
+    identical to one that found nothing.
+    """
+
+    semantic_query: str
+    state: str | None = None
+    created_after: str | None = None
+    created_before: str | None = None
+    labels: list[str] = []
+    author: str | None = None
+    unanswered: bool = False
+    min_reactions: int | None = None
+    sort: str = "relevance"
+    understood: bool = False
+    note: str = ""
+
+
+class SearchAgentContext(BaseModel):
+    """What the triage agent already concluded about this issue, if anything."""
+
+    investigation_id: str | None = None
+    decision: str | None = None
+    confidence: float | None = None
+    status: str | None = None
+
+
+class SearchResult(BaseModel):
+    """One real issue. Every field comes from the index, none is generated."""
+
+    number: int | None
+    title: str
+    state: str
+    labels: list[str] = []
+    author: str
+    created_at: str
+    comments: int
+    reactions: int
+    # Cosine similarity to the semantic query, 0-1.
+    score: float
+    # The passage of the body most related to the query, chosen by word overlap.
+    snippet: str
+    # Similarity blended with recency, engagement and agent confidence.
+    rank_score: float = 0.0
+    agent: SearchAgentContext | None = None
+
+
+class SearchStats(BaseModel):
+    """How the search was executed, so a thin result set can be explained."""
+
+    considered: int
+    returned: int
+    # "in_query" when every filter ran inside the Chroma query;
+    # "post_filtered_dates" when the collection predates `created_ts` and the
+    # date window had to be applied to an over-fetched candidate set.
+    filter_mode: str
+    indexed: int
+    # Hits that matched the filters but scored below the relevance floor.
+    # Reported so a short list is not mistaken for a small index.
+    below_floor: int = 0
+
+
+class SearchResponse(BaseModel):
+    repo_name: str
+    query: str
+    intent: SearchIntent
+    results: list[SearchResult]
+    stats: SearchStats
+
+
+# ---------------------------------------------------------------------------
+# Auto-fix pull requests. Additive: no existing model changes, so no frontend
+# mirror is invalidated and the contract freeze in root CLAUDE.md 7 holds.
+# ---------------------------------------------------------------------------
+
+
+class AutoFixResponse(BaseModel):
+    """The outcome of replaying a known fix onto the current codebase.
+
+    `reason` is always populated, including on success, and is the field a UI
+    should show. Every non-`opened` status is a *correct* answer the agent
+    reached on purpose -- the patch no longer applies, the diff spans too many
+    files, writes are disabled -- and collapsing those into "failed" would hide
+    the one piece of information the maintainer actually wants.
+
+    `status` values:
+      opened          a draft pull request was created
+      existing        one was already open for this issue; nothing was written
+      not_applicable  a guardrail refused the patch; see reason
+      blocked         writes are disabled (DEMO_MODE, or auto-fix not enabled)
+      no_source_pr    no past fix was found to replay
+      error           the attempt failed; see reason
+    """
+
+    status: Literal[
+        "opened", "existing", "not_applicable", "blocked", "no_source_pr", "error"
+    ]
+    reason: str
+    source_pr: int | None = None
+    pr_number: int | None = None
+    pr_url: str | None = None
+    branch: str | None = None
+    file: str | None = None
+    changed_lines: int = 0
+    # Whether the repository runs CI on pull requests, so the caller can say
+    # "check the test results" rather than implying Doombot verified anything.
+    ci: bool = False
+    commented: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Regression watching. The inverse of auto-fix: instead of an issue looking for
+# a past fix, a commit is checked against every past fix to see which one it
+# undid. Additive -- no existing model changes.
+# ---------------------------------------------------------------------------
+
+
+class RegressionFinding(BaseModel):
+    """A merged fix whose own patch applies cleanly again, meaning it was undone.
+
+    The discriminator is exact: replaying a merged pull request's diff against
+    the current file either reports "the fix is already applied" -- the healthy
+    case -- or it applies, which can only mean the lines that fix added are no
+    longer there. No model and no heuristic is involved in that judgement.
+
+    `status` is the furthest the watcher got:
+      detected      the regression is real; nothing was written
+      issue_filed   an issue was opened describing it
+      fix_opened    a draft pull request restoring the fix is open
+      blocked       writes are disabled (DEMO_MODE, or the watcher is read-only)
+      error         the attempt failed; see reason
+    """
+
+    source_pr: int
+    source_title: str
+    file: str
+    changed_lines: int
+    # ISO-8601 UTC, and the commit the finding was made against, so a stale
+    # entry is recognisable rather than looking current.
+    detected_at: str
+    head_sha: str
+    issue_number: int | None = None
+    pr_number: int | None = None
+    pr_url: str | None = None
+    status: Literal["detected", "issue_filed", "fix_opened", "blocked", "error"]
+    reason: str

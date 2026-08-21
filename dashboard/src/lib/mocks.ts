@@ -8,6 +8,7 @@ import type {
   CodeGraphNode,
   CodeGraphResponse,
   IssueGraphResponse,
+  SearchResponse,
   SourceFile,
 } from "./types";
 
@@ -288,6 +289,9 @@ export const mockCodeGraph: CodeGraphResponse = {
     cluster_count: 6,
     clusters: ["agents", "agents/triage", "rag", "api", "dashboard/lib", "dashboard/components"],
     languages: ["python", "typescript"],
+    // Empty because this mock graph has nodes: the field only explains an
+    // empty graph, and a value here would describe a state the mock never reaches.
+    skipped_languages: [],
     attribution: "Semantic graph adapted from GraphDev (MIT) for Doombot F15.",
   },
   impact: {
@@ -339,5 +343,98 @@ export function mockSourceFile(path: string): SourceFile {
     lines: content.split("\n").length,
     language: path.endsWith(".py") ? "python" : "text",
     truncated: false,
+  };
+}
+
+/**
+ * Offline stand-in for a search.
+ *
+ * Returns the same three issues regardless of query, with the intent marked
+ * `understood: false` and a note saying so. That is deliberate: mock mode must
+ * not imply that query understanding ran, because the whole point of the
+ * `understood` flag is that a filter which never executed looks different from
+ * one that matched nothing.
+ */
+export function mockSearch(query: string): SearchResponse {
+  const results = [
+    {
+      number: 6499,
+      title: "Performance degradation in node v22",
+      state: "open",
+      labels: ["performance"],
+      author: "octocat",
+      created_at: "2026-06-14T09:12:00Z",
+      comments: 0,
+      reactions: 4,
+      score: 0.31,
+      snippet:
+        "the overall throughput is not degraded by much but the per-request latency had a visible jump after upgrading",
+      rank_score: 0.244,
+      agent: null,
+    },
+    {
+      number: 6612,
+      title: "compileTrust is slow for long proxy lists",
+      state: "open",
+      labels: [],
+      author: "hubot",
+      created_at: "2026-05-02T17:40:00Z",
+      comments: 0,
+      reactions: 0,
+      score: 0.18,
+      snippet: "Create a very long string with many IP addresses separated by commas",
+      rank_score: 0.159,
+      agent: {
+        investigation_id: "8518ecf6-880e-4cd5-a221-055a28eb188b",
+        decision: "no_action",
+        confidence: 0.5,
+        status: "done",
+      },
+    },
+    {
+      number: 6348,
+      title: "Query param parsing drops values over 1000 chars",
+      state: "closed",
+      labels: ["bug"],
+      author: "mona",
+      created_at: "2026-02-19T11:05:00Z",
+      comments: 3,
+      reactions: 1,
+      score: 0.16,
+      snippet: "Remove param value if it is over 1000, currently returns undefined",
+      rank_score: 0.14,
+      agent: {
+        investigation_id: "269912d6-0781-4fa6-980a-096ee0ca45b6",
+        decision: "close_duplicate",
+        confidence: 0.87,
+        status: "done",
+      },
+    },
+  ];
+
+  return {
+    repo_name: "expressjs/express",
+    query,
+    intent: {
+      semantic_query: query,
+      state: null,
+      created_after: null,
+      created_before: null,
+      labels: [],
+      author: null,
+      unanswered: false,
+      min_reactions: null,
+      sort: "relevance",
+      understood: false,
+      note: "Offline mock data — the query was not interpreted.",
+    },
+    results,
+    stats: {
+      considered: results.length,
+      returned: results.length,
+      filter_mode: "none",
+      indexed: 200,
+      below_floor: 0,
+    },
   };
 }

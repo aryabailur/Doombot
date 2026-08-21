@@ -10,6 +10,7 @@ import type {
   CodeGraphResponse,
   IndexJobResponse,
   IssueGraphResponse,
+  SearchResponse,
   SourceFile,
 } from "./types";
 import {
@@ -21,6 +22,7 @@ import {
   mockBrief,
   mockCodeGraph,
   mockIssueGraph,
+  mockSearch,
   mockSourceFile,
 } from "./mocks";
 
@@ -194,6 +196,24 @@ export function getCodeGraph(
  * source would multiply that payload for content nobody reads until they open a
  * file. Cached server-side, so clicking back through a subsystem is free.
  */
+/**
+ * Natural-language search over a repository's indexed history.
+ *
+ * One request per submit, not per keystroke: stage 1 is a model round-trip, so
+ * a search-as-you-type version would fire a model call per character. The bar
+ * debounces and submits.
+ */
+export function searchIssues(
+  owner: string,
+  repo: string,
+  query: string,
+  k = 20,
+): Promise<SearchResponse> {
+  if (USE_MOCKS) return delay().then(() => mockSearch(query));
+  const params = new URLSearchParams({ q: query, k: String(k) });
+  return request(`/api/repos/${owner}/${repo}/search?${params.toString()}`);
+}
+
 export function getSourceFile(
   owner: string,
   repo: string,

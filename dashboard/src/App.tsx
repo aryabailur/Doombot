@@ -38,6 +38,8 @@ import {
   type PipelineEvent,
 } from '@/components/OnboardingPipeline'
 import { RepositorySelector } from '@/components/RepositorySelector'
+import { SearchBar } from '@/components/SearchBar'
+import { SearchResults } from '@/components/SearchResults'
 import { SkeletonState } from '@/components/SkeletonState'
 import {
   getInvestigation,
@@ -620,6 +622,7 @@ export function App() {
       <AppShell
         toolbar={
           <>
+            <SearchBar />
             <RepositorySelector
               isIndexing={indexing}
               onIndexRequested={async () => {
@@ -757,6 +760,7 @@ export function App() {
           />
           <Route element={<GraphPage repoName={repoName} />} path="/graph" />
           <Route element={<ExplorerPage repoName={repoName} />} path="/explorer" />
+          <Route element={<SearchResults repoName={repoName} />} path="/search" />
           <Route element={<HealthPage repoName={repoName} />} path="/health" />
         </Routes>
       </AppShell>

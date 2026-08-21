@@ -1,5 +1,11 @@
 @import './tokens.css';
 @import '@fontsource-variable/geist';
+/*
+ * mayank's type pairing. Loaded after Geist so Geist remains the local
+ * fallback: if this request is blocked the UI degrades to a bundled font
+ * rather than to a system serif.
+ */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 @tailwind base;
 @tailwind components;

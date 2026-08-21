@@ -97,6 +97,24 @@ def index_repo_files(repo_name: str) -> int:
     return len(split_file_content_doc)
 
 
+def _epoch_seconds(value) -> int:
+    """An ISO-8601 timestamp as epoch seconds, or 0 when it cannot be read.
+
+    0 rather than None: Chroma metadata cannot hold None, and a sentinel that
+    sorts before every real issue keeps an unparseable date out of every
+    "created after" window instead of into all of them.
+    """
+    from datetime import datetime
+
+    text = str(value or "").strip()
+    if not text:
+        return 0
+    try:
+        return int(datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp())
+    except ValueError:
+        return 0
+
+
 def index_issues(repo_name: str, state: str = "all", limit: int = 200) -> int:
     """Index (or upsert) issues into `{repo}-issues`, one Document per issue.
 
@@ -134,6 +152,18 @@ def index_issues(repo_name: str, state: str = "all", limit: int = 200) -> int:
                 # silently killed one of the graph's four visual encodings.
                 "reactions": int(issue.get("reactions") or 0),
                 "comments": int(issue.get("comments") or 0),
+                # The same timestamp as `created_at`, as epoch seconds.
+                #
+                # Chroma's range operators reject strings -- filtering
+                # `created_at` with $gte raises "Expected operand value to be an
+                # int or a float" -- so a date window cannot be expressed in the
+                # query against the ISO field. Semantic search needs date
+                # windows, and doing them in the query rather than as a
+                # post-filter is what keeps them from silently returning almost
+                # nothing. Duplicated rather than replacing `created_at`:
+                # everything else reads that field, and 8 bytes per issue is
+                # cheaper than a migration.
+                "created_ts": _epoch_seconds(issue.get("created_at")),
             },
         )
         docs.append(doc)

@@ -5,8 +5,11 @@ the agent must *continuously monitor activity and create subtasks* rather than
 wait to be asked. Everything else in the system is reactive to a POST; this is
 the part that makes it agentic.
 
-Three subtasks, matching the PS wording:
+Four subtasks, matching the PS wording:
 
+  regression      every past merged fix is replayed against the repository's
+                  current state; anything found to have been undone is filed
+                  as a new issue this same cycle
   investigation   a newly-seen issue gets the full triage graph run on it,
                   which is where duplicate checking and missing-information
                   detection happen
@@ -83,6 +86,38 @@ async def _scan_repo(repo_name: str) -> None:
     from mcp_server.github_client import get_issues
 
     from api.health import compute_and_record
+
+    # --- subtask: regressions --------------------------------------------
+    # Runs first, ahead of both index and investigate. If it files an issue,
+    # that issue needs to reach the *other* two subtasks in this same cycle,
+    # not the next one:
+    #   - before investigate, so the investigate subtask below picks up the
+    #     freshly filed issue in this pass -- detect, file and investigate
+    #     complete together instead of the issue sitting for a full interval
+    #     before anything looks at it.
+    #   - before index, so this cycle's indexing embeds the new issue rather
+    #     than leaving it invisible to duplicate checks until the next scan.
+    try:
+        from agents.triage.regression import sweep
+
+        findings = await asyncio.to_thread(sweep, repo_name)
+    except Exception:
+        logger.exception("regression subtask failed for %s", repo_name)
+        findings = []
+
+    for finding in findings:
+        await ws.broadcast({
+            "type": "activity",
+            "data": {
+                "ts": finding.get("detected_at", ""),
+                "repo_name": repo_name,
+                "message": (
+                    f"Regression in {finding.get('file', '?')} — the fix from "
+                    f"#{finding.get('source_pr', '?')} is no longer present"
+                ),
+                "severity": "warning",
+            },
+        })
 
     # --- subtask: refresh the RAG index ---------------------------------
     # Done before investigating, so a new issue can be compared against

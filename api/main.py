@@ -44,16 +44,58 @@ def _warn_missing_credentials() -> None:
         )
 
 
+async def _warm_embedding_model() -> None:
+    """Load the sentence-transformer once, in the background, at startup.
+
+    The model is a module-level singleton in `rag/embedder.py`, so whichever
+    request touches it first pays the whole load -- measured at 11.5s. That
+    request is usually the first thing a person does after starting the API,
+    which is exactly the worst moment to spend eleven seconds: an auto-fix or a
+    search that normally takes eleven feels like a minute.
+
+    Runs in a thread so it never blocks the event loop, and swallows its own
+    failure: a machine that cannot load the model has bigger problems than a
+    cold cache, and refusing to start the API over it would take down every
+    endpoint that does not need embeddings at all.
+    """
+    import asyncio
+
+    def _load() -> None:
+        from rag.embedder import _get_model
+
+        _get_model()
+
+    # "uvicorn.error", not __name__: uvicorn installs its own logging config
+    # and does not enable arbitrary module loggers, so an INFO line logged under
+    # api.main never reaches the console. This line exists to be *seen* -- it is
+    # how an operator knows the API is ready for a request that embeds anything.
+    log = logging.getLogger("uvicorn.error")
+    try:
+        await asyncio.to_thread(_load)
+        log.info("embedding model warmed -- searches and auto-fix are now fast")
+    except Exception:
+        log.warning(
+            "could not warm the embedding model; the first search will be slow",
+            exc_info=True,
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _warn_missing_credentials()
     init_db()
     await mcp_client.startup()
+    # Fire and forget: the API is ready to serve immediately, and the model
+    # finishes loading behind the first few requests rather than inside one.
+    import asyncio
+
+    warm = asyncio.create_task(_warm_embedding_model())
     # Autonomous monitoring (F01, the compulsory PS-04 feature). No-ops unless
     # DOOMBOT_MONITOR_REPOS names a repository -- it starts investigations on
     # its own, so it must not be on by default.
     await monitor.start()
     yield
+    warm.cancel()
     await monitor.stop()
     await mcp_client.shutdown()
 

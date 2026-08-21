@@ -660,7 +660,7 @@ function IssueRelationshipGraph({
             if (neighbourhood) {
               return token('--accent-bright')
             }
-            // `--border` (#24332a) is a 1px-divider colour: on the graph's
+            // `--border` (#332f28) is a 1px-divider colour: on the graph's
             // near-black canvas it was effectively invisible, so the
             // relationships the graph exists to show could not be seen. The
             // code graph was already fixed for this; the issue graph was not.
@@ -869,10 +869,10 @@ function codeNodeColour(node: CodeGraphNode, clusters: string[]): string {
 /**
  * Link colour for the code graph.
  *
- * The default edge used `--border` (#24332a), a near-black green-grey chosen
- * for 1px dividers against a surface -- on the graph's #070a08 canvas it was
+ * The default edge used `--border` (#332f28), a near-black warm grey chosen
+ * for 1px dividers against a surface -- on the graph's #131210 canvas it was
  * effectively invisible, so the dependencies the graph exists to show could
- * not be seen at all. `--text-muted` (#87958c) is the dimmest token that is
+ * not be seen at all. `--text-muted` (#8b8578) is the dimmest token that is
  * still legible on that background.
  *
  * `dim` fades everything outside a focused neighbourhood instead of hiding it,

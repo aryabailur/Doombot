@@ -4,9 +4,9 @@ The authoritative feature registry is `docs/DESIGN.md` §3. This file maps each
 feature to **who builds it, on which branch, and in what order** — it does not
 redefine scope.
 
-**Feature IDs (F01–F18) are the shared vocabulary.** Every branch, PR, and task
+**Feature IDs (F01–F20) are the shared vocabulary.** Every branch, PR, and task
 references one. F15–F16 are specified in `STRETCH_FEATURES.md`, F17–F18 in
-`docs/INTELLIGENCE.md`.
+`docs/INTELLIGENCE.md`, F19–F20 in `AUTO_FIX.md`.
 
 ---
 
@@ -30,6 +30,8 @@ references one. F15–F16 are specified in `STRETCH_FEATURES.md`, F17–F18 in
 | F14 | VS Code extension | P2 | D | `feat/d-ext-` |
 | F17 | Adaptive repository learning | P2 | B | `feat/b-adaptive-learning` |
 | F18 | MCP intelligence layer | P2 | B | `feat/b-mcp-intelligence` |
+| F19 | Auto-fix pull requests | P2 | B + D | `feat/b-auto-fix-pr` |
+| F20 | Regression watching | P2 | B + D | `feat/b-auto-fix-pr` |
 
 **P0 = the minimum credible demo.** F01–F06 plus F13. Finish and polish these
 before touching anything else. P1 features are differentiators, added only once

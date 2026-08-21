@@ -105,6 +105,37 @@ def retrieve_with_scores(query: str, repo_name: str, kind: str = "issues", k: in
     return [(doc, cosine_from_distance(distance, space)) for doc, distance in results]
 
 
+def retrieve_filtered(
+    query: str,
+    repo_name: str,
+    kind: str = "issues",
+    k: int = 20,
+    where: dict | None = None,
+) -> list:
+    """`retrieve_with_scores` with a Chroma metadata filter applied.
+
+    Separate from `retrieve_with_scores` rather than an optional argument on it,
+    so that the duplicate-detection and precedent paths cannot accidentally
+    acquire a filter -- those compare whole issues against the whole index by
+    design, and a stray `where` there would narrow the comparison without
+    anything failing visibly.
+
+    `where` is passed to Chroma, which applies it **before** selecting the k
+    nearest. That ordering is the reason this exists: post-filtering a plain
+    top-k drops the neighbours that matched and leaves genuinely qualifying
+    issues sitting just outside k. Pass None for no filter -- an empty dict is
+    not the same thing and matches nothing on some Chroma versions.
+    """
+    vector_db = get_collection(repo_name, kind)
+    space = collection_space(vector_db)
+    results = (
+        vector_db.similarity_search_with_score(query, k=k, filter=where)
+        if where
+        else vector_db.similarity_search_with_score(query, k=k)
+    )
+    return [(doc, cosine_from_distance(distance, space)) for doc, distance in results]
+
+
 def find_duplicates(issue_text: str, repo_name: str, exclude_number=None) -> dict:
     """Find semantically similar past issues in `{repo}-issues`.
 

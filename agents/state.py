@@ -36,4 +36,6 @@ class GraphState(TypedDict, total=False):
     labels_suggested: bool         # True => below threshold, decider must not auto-apply
     resolution: dict | None        # F16: {source_issue, reply, confidence, auto_post, posted}
     decision: dict                 # {"action": ..., "reason": ..., "confidence": float}
+    auto_fix_plan: dict | None     # applicability check from patch_checker
+    auto_fix: dict | None          # draft-PR result from fix_pr_opener
     chain: Annotated[list[dict], add]  # StepRecord log; every node appends exactly one

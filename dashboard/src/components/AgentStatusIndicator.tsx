@@ -11,9 +11,17 @@ export interface AgentStatusIndicatorProps {
   className?: string
 }
 
+/*
+ * Healthy is `--success`, not `--accent`.
+ *
+ * These read correctly by accident while the brand accent happened to be
+ * green. It is orange-red now, so "Active" and "Connected" rendered in the
+ * same hue as the warning states -- a working agent looked like a problem.
+ * Status belongs on the status scale; the accent is for brand and action.
+ */
 const agentState = {
   connecting: { label: 'Connecting', className: 'text-text-muted' },
-  connected: { label: 'Active', className: 'text-accent' },
+  connected: { label: 'Active', className: 'text-success' },
   reconnecting: { label: 'Reconnecting', className: 'text-warning' },
   offline: { label: 'Offline', className: 'text-critical' },
 } satisfies Record<ConnectionState, { label: string; className: string }>
@@ -65,7 +73,7 @@ export function AgentStatusIndicator({
         <span
           className={cn(
             'font-medium',
-            githubConnected ? 'text-accent' : 'text-critical',
+            githubConnected ? 'text-success' : 'text-critical',
           )}
         >
           {githubConnected ? 'Connected' : 'Unreachable'}

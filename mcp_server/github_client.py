@@ -1,4 +1,4 @@
-from github import Github
+from github import Github, GithubException, UnknownObjectException
 from urllib3.util import Retry
 from dotenv import load_dotenv
 import logging
@@ -54,6 +54,32 @@ def _get_client() -> Github:
             timeout=20,
         )
     return _client
+
+
+#: repo_name -> PyGithub Repository handle, for the lifetime of the process.
+_repos: dict = {}
+
+
+def _repo(repo_name: str):
+    """The cached `Repository` handle for `repo_name`.
+
+    `get_repo` is a real API round trip -- measured at 0.6s here -- and almost
+    every helper in this module opened with one. A single auto-fix run made
+    twelve of them for the same repository, about six seconds spent re-fetching
+    an object that had not changed. Caching the handle removes that entirely.
+
+    Safe because a `Repository` is a handle, not a snapshot: PyGithub fetches
+    and caches each attribute on access, and the mutating calls below (create a
+    ref, update a file, open a pull request) all go straight to the API rather
+    than reading local state. The tradeoff is that a repository renamed or
+    transferred mid-process keeps resolving to the old handle until restart,
+    which is the right trade for a long-lived API process serving one repo.
+    """
+    repo = _repos.get(repo_name)
+    if repo is None:
+        repo = _get_client().get_repo(repo_name)
+        _repos[repo_name] = repo
+    return repo
 
 
 def git_initialization(repo_name,pr_number):
@@ -236,6 +262,22 @@ def get_issue(repo_name: str, issue_number: int) -> dict:
     return _issue_dict(issue)
 
 
+def get_issue_text(repo_name: str, issue_number: int) -> dict:
+    """Just an issue's title and body -> {"number", "title", "body"}.
+
+    `get_issue` above returns the full triage shape, and computing its exact
+    `participants` count means listing every comment -- a second round trip,
+    measured at 1.8s total. Auto-fix only needs the text to score a diff's
+    relevance against, so it pays for the title and body and nothing else.
+    """
+    issue = _repo(repo_name).get_issue(issue_number)
+    return {
+        "number": issue.number,
+        "title": issue.title,
+        "body": issue.body or "",
+    }
+
+
 def get_issues(repo_name: str, state: str = "open", limit: int = 100) -> list[dict]:
     """List up to `limit` issues for repo_name filtered by state
     ('open'/'closed'/'all'). Same per-issue dict shape as get_issue.
@@ -317,9 +359,7 @@ def get_issues(repo_name: str, state: str = "open", limit: int = 100) -> list[di
 
 def post_issue_comment(repo_name: str, issue_number: int, comment: str) -> str:
     """Post a comment on the issue. Return the created comment's body."""
-    g = _get_client()
-    repo = g.get_repo(repo_name)
-    issue = repo.get_issue(issue_number)
+    issue = _repo(repo_name).get_issue(issue_number)
     created = issue.create_comment(comment)
     return created.body
 
@@ -346,3 +386,151 @@ def get_issue_comments(repo_name: str, issue_number: int) -> list[dict]:
         {"author": c.user.login if c.user else "", "body": c.body or ""}
         for c in issue.get_comments()
     ]
+
+
+def get_default_branch(repo_name: str) -> str:
+    """The repository's default branch name.
+
+    Auto-fix needs a base to branch from and a base to open the PR against,
+    and either hardcoded as "main" breaks silently on any repository still on
+    "master" or on something else entirely -- reading `default_branch` off
+    the repo itself removes the guess.
+    """
+    return _repo(repo_name).default_branch
+
+
+def get_file_at_ref(repo_name: str, file_path: str, ref: str | None = None) -> dict:
+    """Fetch one file as it exists at `ref` (the default branch if `ref` is
+    None). Returns {"content": str, "sha": str, "path": str}; the `sha` is
+    the blob sha `commit_file` needs to update this exact version.
+
+    Raises on a directory path and on a file that does not decode as UTF-8,
+    rather than returning "" the way `get_file_content` above does. That
+    swallow is harmless for a viewer, but here the content is about to be
+    edited and recommitted -- silently turning a binary file into an empty
+    string would make the caller commit real data loss with nothing in the
+    return value to indicate it went wrong.
+    """
+    repo = _repo(repo_name)
+    # `ref=None` is not the same as omitting it: PyGithub asserts the argument
+    # is NotSet or a str, so passing None explicitly raises an AssertionError
+    # rather than defaulting to the repository's HEAD.
+    contents = (
+        repo.get_contents(file_path, ref=ref)
+        if ref is not None
+        else repo.get_contents(file_path)
+    )
+    if isinstance(contents, list):
+        raise ValueError(f"{file_path} is a directory, not a file")
+    try:
+        content = contents.decoded_content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(
+            f"{file_path} is not valid UTF-8 -- refusing to treat a binary "
+            "file as empty text"
+        ) from exc
+    return {"content": content, "sha": contents.sha, "path": contents.path}
+
+
+def create_branch(repo_name: str, branch: str, base_branch: str | None = None) -> dict:
+    """Create `branch` off the tip of `base_branch` (the default branch if
+    None). Returns {"branch": str, "sha": str, "base": str, "created": bool}.
+
+    Auto-fix can run more than once against the same issue, and the second
+    pass should pick up the branch the first pass already made, not fail the
+    whole flow because it exists. GitHub answers a duplicate
+    `create_git_ref` with a 422, so that specific status is caught and
+    turned into `created: False` with the branch's current sha; any other
+    status is a real failure and is left to raise.
+    """
+    repo = _repo(repo_name)
+    base = base_branch or repo.default_branch
+    base_sha = repo.get_branch(base).commit.sha
+
+    try:
+        repo.create_git_ref(ref=f"refs/heads/{branch}", sha=base_sha)
+        return {"branch": branch, "sha": base_sha, "base": base, "created": True}
+    except GithubException as e:
+        if e.status == 422:
+            existing_sha = repo.get_branch(branch).commit.sha
+            return {"branch": branch, "sha": existing_sha, "base": base, "created": False}
+        raise
+
+
+def commit_file(repo_name: str, file_path: str, content: str, message: str,
+                branch: str, sha: str) -> str:
+    """Update one file's content on `branch`, keyed by `sha` -- the blob sha
+    `get_file_at_ref` returned for the version the fix was computed against
+    -- so GitHub rejects the write with a 409 if the file moved underneath it
+    instead of silently overwriting whatever is there now. Returns the new
+    commit sha.
+    """
+    repo = _repo(repo_name)
+    result = repo.update_file(file_path, message, content, sha, branch=branch)
+    return result["commit"].sha
+
+
+def find_open_pull_request_for_branch(repo_name: str, branch: str) -> dict | None:
+    """Whether `branch` already has an open pull request, so a re-run updates
+    the existing draft instead of opening a duplicate one.
+    Returns {"number": int, "url": str, "draft": bool} or None.
+
+    `get_pulls(head=...)` needs the `owner:branch` form, not the bare branch
+    name -- GitHub's API matches `head` against a fork-qualified reference,
+    so a bare branch name matches nothing and a re-run would never find its
+    own PR. The owner is read off `repo.full_name` rather than parsed out of
+    `repo_name` as given, so this still works after a repository transfer or
+    rename.
+    """
+    repo = _repo(repo_name)
+    owner = repo.full_name.split("/")[0]
+    pulls = repo.get_pulls(state="open", head=f"{owner}:{branch}")
+    for pr in pulls:
+        return {"number": pr.number, "url": pr.html_url, "draft": pr.draft}
+    return None
+
+
+def create_draft_pull_request(repo_name: str, title: str, body: str,
+                              head: str, base: str | None = None) -> dict:
+    """Open a pull request for `head` against `base` (the default branch if
+    None), always as a draft. Returns {"number": int, "url": str, "draft": bool}.
+
+    Auto-fix proposes a change for a human to review, not a change to merge
+    on its own -- a non-draft PR can trigger the same required-review and
+    notification machinery as a maintainer explicitly asking for eyes on it,
+    which nobody did. If GitHub rejects `draft=True` outright, that exception
+    is left to propagate rather than retried as a non-draft PR; silently
+    falling back to ready-for-review is exactly the behavior this function
+    must never have.
+    """
+    repo = _repo(repo_name)
+    base_branch = base or repo.default_branch
+    pr = repo.create_pull(title=title, body=body, head=head, base=base_branch, draft=True)
+    return {"number": pr.number, "url": pr.html_url, "draft": pr.draft}
+
+
+def has_ci_workflows(repo_name: str) -> bool:
+    """Whether `.github/workflows/` exists and holds at least one file, so
+    auto-fix can decide whether there is CI to wait on before a draft is
+    worth marking ready.
+
+    A repository with no workflows directory makes `get_contents` raise
+    `UnknownObjectException` -- PyGithub's wrapper around GitHub's 404 --
+    rather than return an empty list, so that has to be caught and read as
+    "no CI" rather than as an error.
+
+    Never raises at all, though, not just for the missing directory. The only
+    thing this answers is one sentence in a pull request body; letting a rate
+    limit or a permissions quirk here abort a fix PR that is otherwise ready
+    would trade the whole feature for a footnote.
+    """
+    try:
+        contents = _repo(repo_name).get_contents(".github/workflows")
+    except UnknownObjectException:
+        return False
+    except Exception:
+        logger.warning("has_ci_workflows: could not read %s", repo_name, exc_info=True)
+        return False
+    if isinstance(contents, list):
+        return len(contents) > 0
+    return True

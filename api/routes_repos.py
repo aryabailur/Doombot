@@ -6,6 +6,7 @@
     GET  /api/repos/{owner}/{repo}/health     -> score + breakdown + history
     GET  /api/repos/{owner}/{repo}/graph      -> issue relationship graph (F15)
     GET  /api/repos/{owner}/{repo}/source     -> one file, for the code explorer
+    GET  /api/repos/{owner}/{repo}/search     -> natural-language issue search
     GET  /api/brief/{owner}/{repo}            -> weekly brief markdown
 
 No longer the fixture phase. Health is computed from real GitHub data by
@@ -33,7 +34,9 @@ from api.schemas import (
     GraphResponse,
     HealthResponse,
     IndexJobResponse,
+    RegressionFinding,
     RepoSummary,
+    SearchResponse,
     SourceFileResponse,
 )
 from memory import repo as store
@@ -148,6 +151,32 @@ async def get_repo_health(owner: str, repo: str) -> HealthResponse:
     )
 
 
+@router.get(
+    "/api/repos/{owner}/{repo}/regressions",
+    response_model=list[RegressionFinding],
+)
+def list_regressions(owner: str, repo: str) -> list[RegressionFinding]:
+    """Regressions the monitoring poller has already found, newest first.
+
+    Read-only: this reports what `_scan_repo`'s regression subtask found on
+    its own schedule, it does not run a sweep itself. A GET that quietly
+    re-swept on every call would turn a dashboard or extension refresh into
+    unbounded GitHub writes -- the same trap `get_repo_health` avoids by
+    recomputing a score but never filing anything.
+
+    An empty list, not a 404, for a repository with no findings: the
+    extension polls this endpoint on a timer, and a 404 there would read as
+    this endpoint being broken rather than as the true, uneventful answer.
+    """
+    # Imported here, not at module scope, for the same reason as every other
+    # lazy import in this file: agents pulls in torch and chromadb, and the
+    # API process should start and answer /api/health before those load.
+    from agents.triage.regression import recent
+
+    repo_name = f"{owner}/{repo}"
+    return [RegressionFinding(**finding) for finding in recent(repo_name)]
+
+
 def _escalated_issue_numbers(repo_name: str) -> set[int]:
     numbers: set[int] = set()
     try:
@@ -238,6 +267,41 @@ def _cached_source(repo_name: str, path: str) -> str | None:
         return get_file_content(repo_name, path)
     except Exception:
         return None
+
+
+# Upper bound on results. Past this the list stops being something a reader
+# scans and starts being something they scroll past, and every extra hit is
+# another embedding comparison and snippet pass.
+MAX_SEARCH_RESULTS = 50
+
+
+@router.get("/api/repos/{owner}/{repo}/search", response_model=SearchResponse)
+def search_repo_issues(
+    owner: str,
+    repo: str,
+    q: str = Query(..., min_length=1, description="Natural-language query"),
+    k: int = Query(20, ge=1, le=MAX_SEARCH_RESULTS),
+) -> SearchResponse:
+    """Search a repository's indexed history by meaning, not by keyword.
+
+    Three stages, in `rag/search.py`: the model translates the question into
+    search parameters, Chroma answers it with those filters applied, and the
+    hits are ranked by similarity, recency, engagement and whatever the triage
+    agent already decided about each issue.
+
+    The model never writes a result. Every issue returned is a real indexed
+    issue, and the response carries the parsed intent so a reader can see how
+    their question was interpreted rather than guessing why something is
+    missing.
+
+    Read-only. An unindexed repository is not an error: it returns zero results
+    with `stats.indexed == 0`, which is a different sentence for the UI to say
+    than "nothing matched".
+    """
+    from rag.search import search
+
+    repo_name = f"{owner}/{repo}"
+    return SearchResponse.model_validate(search(repo_name, q, k=k))
 
 
 @router.get("/api/repos/{owner}/{repo}/source", response_model=SourceFileResponse)
