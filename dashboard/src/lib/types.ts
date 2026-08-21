@@ -197,3 +197,39 @@ export interface RepoGraphResponse {
   links: GraphLink[];
   metadata: Record<string, unknown>;
 }
+
+// Mirrors new AskCitation/AskVisual/AskRequest/AskResponse models in api/schemas.py (additive, non-breaking).
+export interface AskCitation {
+  type: string;
+  ref: string;
+  score: number | null;
+  snippet: string;
+  number: number | null;
+}
+
+export type AskVisualKind =
+  | "evidence_bar"
+  | "similar_incidents"
+  | "architecture_impact"
+  | "precedent"
+  | "code_path";
+
+export interface AskVisual {
+  kind: AskVisualKind;
+  data: Record<string, unknown>;
+}
+
+export interface AskRequest {
+  repo_name: string;
+  question: string;
+  investigation_id?: string | null;
+}
+
+export interface AskResponse {
+  answer: string;
+  visuals: AskVisual[];
+  citations: AskCitation[];
+  confidence: number | null;
+  insufficient_evidence: boolean;
+  suggested_actions: string[];
+}

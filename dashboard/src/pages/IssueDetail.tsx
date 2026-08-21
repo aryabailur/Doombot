@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, ThumbsUp, ThumbsDown, BadgeCheck, AlertTriangle } from "lucide-react";
+import { ArrowLeft, ThumbsUp, ThumbsDown, BadgeCheck, AlertTriangle, Sparkles, GitBranch } from "lucide-react";
 import { getInvestigation, postFeedback, listActions } from "../lib/api";
 import { detailToInvestigation } from "../lib/adapters";
 import { useSocket } from "../lib/useSocket";
@@ -12,6 +12,7 @@ import { AgentRunTimeline } from "../components/AgentRunTimeline";
 import { EvidenceGraph } from "../components/EvidenceGraph";
 import { EvidenceChip } from "../components/EvidenceChip";
 import { ActionApproval } from "../components/ActionApproval";
+import { AskRepoGuardian } from "../components/AskRepoGuardian";
 
 const WS_URL = (import.meta.env.VITE_WS_URL as string | undefined) ?? "ws://localhost:8000/ws";
 
@@ -22,6 +23,7 @@ export function IssueDetail() {
   const [error, setError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<"up" | "down" | null>(null);
   const [pendingActions, setPendingActions] = useState<SuggestedActionApi[]>([]);
+  const [askOpen, setAskOpen] = useState(false);
 
   function load() {
     if (!id) return;
@@ -115,6 +117,23 @@ export function IssueDetail() {
           )}
         </div>
         <ConfidenceRing value={investigation.confidence} label="Confidence" size={104} />
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          onClick={() => setAskOpen(true)}
+          className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-semibold text-muted shadow-flat-sm transition-colors hover:border-ink hover:text-ink"
+        >
+          <Sparkles className="h-3.5 w-3.5" strokeWidth={2.25} />
+          Ask RepoGuardian
+        </button>
+        <button
+          onClick={() => navigate(`/code-graph?highlight=inv:${id}`)}
+          className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-semibold text-muted shadow-flat-sm transition-colors hover:border-ink hover:text-ink"
+        >
+          <GitBranch className="h-3.5 w-3.5" strokeWidth={2.25} />
+          View Architecture Impact
+        </button>
       </div>
 
       <div className="rounded-2xl border border-border bg-card p-6 shadow-flat-sm">
@@ -236,6 +255,13 @@ export function IssueDetail() {
         </button>
         {feedback && <span className="text-xs text-muted">Feedback logged.</span>}
       </div>
+
+      <AskRepoGuardian
+        open={askOpen}
+        onClose={() => setAskOpen(false)}
+        investigationId={id}
+        contextLabel={`#${investigation.number}`}
+      />
     </div>
   );
 }

@@ -184,3 +184,31 @@ class RepoGraphResponse(BaseModel):
     nodes: list[GraphNode]
     links: list[GraphLink]
     metadata: dict
+
+
+class AskCitation(BaseModel):
+    type: str                    # "duplicate" | "security" | "impact" | "label" | "decision" | "file" | "precedent"
+    ref: str
+    score: float | None
+    snippet: str
+    number: int | None = None    # issue/PR number if this citation is an issue/PR
+
+
+class AskVisual(BaseModel):
+    kind: Literal["evidence_bar", "similar_incidents", "architecture_impact", "precedent", "code_path"]
+    data: dict
+
+
+class AskRequest(BaseModel):
+    repo_name: str
+    question: str
+    investigation_id: str | None = None
+
+
+class AskResponse(BaseModel):
+    answer: str
+    visuals: list[AskVisual]
+    citations: list[AskCitation]
+    confidence: float | None
+    insufficient_evidence: bool
+    suggested_actions: list[str]

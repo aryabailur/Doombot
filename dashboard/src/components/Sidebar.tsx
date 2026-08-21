@@ -13,6 +13,7 @@ import {
   Settings,
   Check,
   BadgeCheck,
+  Sparkles,
 } from "lucide-react";
 import { useRepo } from "../lib/RepoContext";
 import { indexRepo } from "../lib/api";
@@ -47,6 +48,7 @@ const NAV_GROUPS: { label: string | null; items: NavItem[] }[] = [
       { to: "/health", label: "Project Health", icon: Activity },
       { to: "/memory", label: "Project Memory", icon: BrainCircuit },
       { to: "/code-graph", label: "Code Graph", icon: GitBranch },
+      { to: "/ask", label: "Ask AI", icon: Sparkles },
     ],
   },
   {

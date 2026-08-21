@@ -12,6 +12,7 @@ import { SecuritySignals } from "./pages/SecuritySignals";
 import { ProjectMemory } from "./pages/ProjectMemory";
 import { ApprovalCenter } from "./pages/ApprovalCenter";
 import { CodeGraph } from "./pages/CodeGraph";
+import { AskAI } from "./pages/AskAI";
 
 export function App() {
   return (
@@ -29,6 +30,7 @@ export function App() {
         <Route path="/memory" element={<ProjectMemory />} />
         <Route path="/approvals" element={<ApprovalCenter />} />
         <Route path="/code-graph" element={<CodeGraph />} />
+        <Route path="/ask" element={<AskAI />} />
       </Route>
     </Routes>
   );

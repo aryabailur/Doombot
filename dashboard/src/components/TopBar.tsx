@@ -1,10 +1,11 @@
 import { useLocation } from "react-router-dom";
-import { Command } from "lucide-react";
+import { Command, Sparkles } from "lucide-react";
 import { useRepo } from "../lib/RepoContext";
 import type { ConnectionState } from "../lib/useSocket";
 
 export interface TopBarProps {
   onOpenPalette: () => void;
+  onOpenAsk: () => void;
   connectionState: ConnectionState;
 }
 
@@ -35,7 +36,7 @@ const STATE_BG: Record<ConnectionState, string> = {
   offline: "bg-danger-soft text-danger",
 };
 
-export function TopBar({ onOpenPalette, connectionState }: TopBarProps) {
+export function TopBar({ onOpenPalette, onOpenAsk, connectionState }: TopBarProps) {
   const location = useLocation();
   const { repoName } = useRepo();
   const crumb = CRUMB[location.pathname] ?? "Investigation";
@@ -61,6 +62,14 @@ export function TopBar({ onOpenPalette, connectionState }: TopBarProps) {
 
       <div className="flex items-center gap-3">
         <span className="hidden font-mono text-xs text-muted sm:inline">{repoName}</span>
+        <button
+          onClick={onOpenAsk}
+          className="flex items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs font-semibold text-muted transition-colors hover:border-ink hover:text-ink"
+        >
+          <Sparkles className="h-3.5 w-3.5" strokeWidth={2.25} />
+          <span>ASK REPOGUARDIAN</span>
+          <span className="font-mono">⌘ K</span>
+        </button>
         <button
           onClick={onOpenPalette}
           className="flex items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs font-semibold text-muted transition-colors hover:border-ink hover:text-ink"

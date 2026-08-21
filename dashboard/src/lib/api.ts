@@ -13,6 +13,8 @@ import type {
   SuggestedActionApi,
   ApproveActionResponseApi,
   RepoGraphResponse,
+  AskRequest,
+  AskResponse,
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
@@ -119,4 +121,8 @@ export function approveAction(actionId: string): Promise<ApproveActionResponseAp
 
 export function rejectAction(actionId: string): Promise<ApproveActionResponseApi> {
   return request(`/api/actions/${actionId}/reject`, { method: "POST" });
+}
+
+export function askRepoGuardian(req: AskRequest): Promise<AskResponse> {
+  return request("/api/ask", { method: "POST", body: JSON.stringify(req) });
 }

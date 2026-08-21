@@ -7,6 +7,7 @@ import { ModeSelector, type GraphVisualizationMode } from "./ModeSelector";
 import { GraphLegend, type LegendEntry } from "./GraphLegend";
 import { GraphControls } from "./GraphControls";
 import { FlowchartView } from "./FlowchartView";
+import { NodeDetailPanel } from "./NodeDetailPanel";
 
 // ---------------------------------------------------------------------------
 // Types — re-exported from lib/types.ts (the single mirror of api/schemas.py)
@@ -30,6 +31,10 @@ export interface CodeGraphViewerProps {
   nodes: GraphNode[];
   links: GraphLink[];
   repoName: string;
+  /** Node id to focus on mount, e.g. from a "View Architecture Impact" deep link (`inv:{investigation_id}`). */
+  initialFocusNodeId?: string;
+  /** Loosely-coupled hook for a future "Ask RepoGuardian" modal — receives a short node context string. */
+  onAskAboutNode?: (nodeContext: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -114,7 +119,7 @@ interface FocusSet {
   links: Set<GraphLink>;
 }
 
-export function CodeGraphViewer({ nodes, links, repoName }: CodeGraphViewerProps) {
+export function CodeGraphViewer({ nodes, links, repoName, initialFocusNodeId, onAskAboutNode }: CodeGraphViewerProps) {
   const [mode, setMode] = useState<GraphVisualizationMode>("classic");
   const [visibleTypes, setVisibleTypes] = useState<Set<GraphNodeType>>(
     () => new Set(["Repository", "Directory", "File", "Issue", "PullRequest", "Decision"]),
@@ -126,6 +131,8 @@ export function CodeGraphViewer({ nodes, links, repoName }: CodeGraphViewerProps
   const [pathSource, setPathSource] = useState<GraphNode | null>(null);
   const [pathError, setPathError] = useState<string | null>(null);
   const [dims, setDims] = useState({ width: 900, height: 600 });
+  const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
+  const [noEvidenceNote, setNoEvidenceNote] = useState<string | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const fgRef2D = useRef<ForceGraphMethods2D<NodeObject2D<GraphNode>, GraphLink> | undefined>(undefined);
@@ -221,6 +228,29 @@ export function CodeGraphViewer({ nodes, links, repoName }: CodeGraphViewerProps
     [filteredLinks],
   );
 
+  // Deep-link support for "View Architecture Impact" (IssueDetail -> /code-graph?highlight=inv:{id}).
+  // Runs once per initialFocusNodeId: focuses the target node, selects it (opens the detail panel),
+  // and — if it's an Issue/PR with zero EVIDENCE links — surfaces an honest "no files referenced"
+  // note instead of fabricating an affected-files list.
+  const appliedInitialFocusRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!initialFocusNodeId || nodes.length === 0) return;
+    if (appliedInitialFocusRef.current === initialFocusNodeId) return;
+    const target = nodes.find((n) => n.id === initialFocusNodeId);
+    if (!target) return;
+    appliedInitialFocusRef.current = initialFocusNodeId;
+    focusOnNode(target);
+    setSelectedNode(target);
+    if (target.type === "Issue" || target.type === "PullRequest") {
+      const hasEvidence = links.some((l) => l.type === "EVIDENCE" && linkEndpointId(l.source) === target.id);
+      setNoEvidenceNote(
+        hasEvidence
+          ? null
+          : "This investigation has no matched files — its evidence didn't include a reference the backend could match to a real file path.",
+      );
+    }
+  }, [initialFocusNodeId, nodes, links, focusOnNode]);
+
   // Plain unweighted BFS over an undirected adjacency built from the currently visible links.
   // Ported from CodeGraphViewer.tsx's calculatePath.
   const runPathfinding = useCallback(
@@ -295,15 +325,22 @@ export function CodeGraphViewer({ nodes, links, repoName }: CodeGraphViewerProps
         return;
       }
       focusOnNode(node);
+      setSelectedNode(node);
+      setNoEvidenceNote(null);
     },
     [pathMode, pathSource, runPathfinding, focusOnNode],
   );
+
+  const closeDetailPanel = useCallback(() => {
+    setSelectedNode(null);
+  }, []);
 
   const togglePathMode = useCallback(() => {
     setPathMode((v) => !v);
     setPathSource(null);
     setPathError(null);
     setFocusSet(null);
+    setSelectedNode(null);
   }, []);
 
   const handleZoomIn = useCallback(() => {
@@ -538,63 +575,85 @@ export function CodeGraphViewer({ nodes, links, repoName }: CodeGraphViewerProps
         pathHint={pathHint}
       />
 
-      <div
-        className={`relative flex-1 overflow-hidden rounded-2xl border border-border shadow-flat-sm ${
-          mode === "mermaid" ? "bg-background" : ""
-        }`}
-        style={mode === "mermaid" ? undefined : { backgroundColor: CANVAS_BG }}
-      >
-        <div ref={containerRef} className="h-full w-full">
-          {mode === "mermaid" ? (
-            <FlowchartView
-              nodes={filteredNodes}
-              links={filteredLinks}
-              nodeColors={NODE_COLORS}
-              linkColors={LINK_COLORS}
-              width={dims.width}
-              height={dims.height}
-            />
-          ) : mode === "graph3d" ? (
-            <ForceGraph3D<GraphNode, GraphLink>
-              ref={fgRef3D}
-              graphData={graphData}
-              width={dims.width}
-              height={dims.height}
-              backgroundColor={CANVAS_BG}
-              nodeThreeObject={graph3dNodeThreeObject}
-              nodeThreeObjectExtend={false}
-              linkColor={graph3dLinkColor}
-              linkOpacity={0.5}
-              onNodeClick={(node) => handleNodeClick(node as GraphNode)}
-              onNodeHover={(node) => setHoverNode((node as GraphNode | null) ?? null)}
-            />
-          ) : (
-            <ForceGraph2D<GraphNode, GraphLink>
-              ref={fgRef2D}
-              graphData={graphData}
-              width={dims.width}
-              height={dims.height}
-              backgroundColor={CANVAS_BG}
-              nodeCanvasObject={nodeCanvasObject}
-              nodePointerAreaPaint={nodePointerAreaPaint}
-              linkColor={linkColor}
-              linkWidth={linkWidth}
-              linkCurvature={0}
-              onNodeClick={(node) => handleNodeClick(node as GraphNode)}
-              onNodeHover={(node) => setHoverNode((node as GraphNode | null) ?? null)}
-              onBackgroundClick={() => {
-                if (!pathMode) setFocusSet(null);
-              }}
-              cooldownTicks={100}
-            />
-          )}
+      {noEvidenceNote && (
+        <div className="rounded-xl border border-dashed border-border bg-background px-3 py-2 text-xs font-medium text-muted">
+          {noEvidenceNote}
         </div>
+      )}
 
-        <div className="pointer-events-none absolute bottom-3 right-3">
-          <div className="pointer-events-auto">
-            <GraphLegend entries={legendEntries} visibleTypes={visibleTypes} onToggleType={toggleType} />
+      <div className="flex flex-1 items-stretch gap-3 overflow-hidden">
+        <div
+          className={`relative min-w-0 flex-1 overflow-hidden rounded-2xl border border-border shadow-flat-sm ${
+            mode === "mermaid" ? "bg-background" : ""
+          }`}
+          style={mode === "mermaid" ? undefined : { backgroundColor: CANVAS_BG }}
+        >
+          <div ref={containerRef} className="h-full w-full">
+            {mode === "mermaid" ? (
+              <FlowchartView
+                nodes={filteredNodes}
+                links={filteredLinks}
+                nodeColors={NODE_COLORS}
+                linkColors={LINK_COLORS}
+                width={dims.width}
+                height={dims.height}
+              />
+            ) : mode === "graph3d" ? (
+              <ForceGraph3D<GraphNode, GraphLink>
+                ref={fgRef3D}
+                graphData={graphData}
+                width={dims.width}
+                height={dims.height}
+                backgroundColor={CANVAS_BG}
+                nodeThreeObject={graph3dNodeThreeObject}
+                nodeThreeObjectExtend={false}
+                linkColor={graph3dLinkColor}
+                linkOpacity={0.5}
+                onNodeClick={(node) => handleNodeClick(node as GraphNode)}
+                onNodeHover={(node) => setHoverNode((node as GraphNode | null) ?? null)}
+              />
+            ) : (
+              <ForceGraph2D<GraphNode, GraphLink>
+                ref={fgRef2D}
+                graphData={graphData}
+                width={dims.width}
+                height={dims.height}
+                backgroundColor={CANVAS_BG}
+                nodeCanvasObject={nodeCanvasObject}
+                nodePointerAreaPaint={nodePointerAreaPaint}
+                linkColor={linkColor}
+                linkWidth={linkWidth}
+                linkCurvature={0}
+                onNodeClick={(node) => handleNodeClick(node as GraphNode)}
+                onNodeHover={(node) => setHoverNode((node as GraphNode | null) ?? null)}
+                onBackgroundClick={() => {
+                  if (!pathMode) {
+                    setFocusSet(null);
+                    setSelectedNode(null);
+                  }
+                }}
+                cooldownTicks={100}
+              />
+            )}
+          </div>
+
+          <div className="pointer-events-none absolute bottom-3 right-3">
+            <div className="pointer-events-auto">
+              <GraphLegend entries={legendEntries} visibleTypes={visibleTypes} onToggleType={toggleType} />
+            </div>
           </div>
         </div>
+
+        {selectedNode && (
+          <NodeDetailPanel
+            node={selectedNode}
+            nodes={nodes}
+            links={links}
+            repoName={repoName}
+            onClose={closeDetailPanel}
+            onAskAboutNode={onAskAboutNode}
+          />
+        )}
       </div>
     </div>
   );

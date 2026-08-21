@@ -18,6 +18,7 @@ from api.ws import websocket_endpoint
 from api.routes_repos import router as repos_router
 from api.routes_investigations import router as investigations_router
 from api.routes_feedback import router as feedback_router
+from api.routes_ask import router as ask_router
 
 
 @asynccontextmanager
@@ -41,5 +42,6 @@ app.add_middleware(
 app.include_router(repos_router)
 app.include_router(investigations_router)
 app.include_router(feedback_router)
+app.include_router(ask_router)
 
 app.add_api_websocket_route("/ws", websocket_endpoint)
