@@ -68,3 +68,35 @@ def add_labels_mcp(repo_name:str,issue_number:int,labels:list[str])->str:
 def get_issue_comments_mcp(repo_name: str, issue_number: int) -> str:
     """Get all comments on an issue, as a JSON list of {author, body}."""
     return json.dumps(get_issue_comments(repo_name, issue_number))
+
+
+@mcp.tool()
+def auto_fix_issue_mcp(repo_name: str, issue_number: int, source_pr: int = 0) -> str:
+    """Attempt to automatically fix a GitHub issue and open a pull request for it.
+
+    This is a write action, not a lookup, and must never be called
+    speculatively "just to see". It costs several GitHub requests (reading
+    the issue, locating or reading a source PR, committing a candidate fix,
+    opening a PR) and changes real repository state. Call it only once a
+    maintainer or the triage flow has decided a fix should be attempted.
+
+    The pull request it opens, when it opens one, is always a **draft** and
+    is never merged automatically -- a human still reviews and merges it.
+    When a fix cannot be applied, the result carries a `reason` string
+    explaining why instead of raising.
+
+    `source_pr` is the PR number a candidate fix should be based on. Pass 0
+    (the default) when that is not known and the fix should locate one
+    itself; MCP tool schemas are cleaner without an Optional parameter, so 0
+    stands in for "not known" at the wire boundary.
+
+    Returns a JSON object with at least: status ("opened", "existing",
+    "not_applicable", "blocked", "no_source_pr", or "error"), reason,
+    source_pr, pr_number, pr_url, branch, file, changed_lines, ci, commented.
+    """
+    # Imported here, not at module scope: this module is imported by the MCP
+    # server at startup, agents.triage.auto_fix reaches into rag, and rag
+    # pulls in torch and chromadb. A module-level import would make every
+    # MCP client pay a multi-second model-stack import just to list tools.
+    from agents.triage.auto_fix import auto_fix_issue
+    return json.dumps(auto_fix_issue(repo_name, issue_number, source_pr or None))

@@ -209,6 +209,40 @@ effect. Drop that import and the tools exist but are invisible on the wire.
 
 ---
 
+## 4c. Auto-Fix PR — the one write tool outside `tools.py`'s GitHub passthroughs
+
+`auto_fix_issue_mcp`, registered in `tools.py` (not `intelligence.py`) via the
+`AUTO_FIX_ISSUE` constant in `tool_names.py`. It is documented here rather than
+folded into the table in §4b because it breaks the property that section
+opens with: **unlike the seven intelligence tools, it is not read-only.**
+Calling it can open a real pull request against the target repository.
+
+| Tool | Backed by | Returns | Read-only? |
+|---|---|---|---|
+| `auto_fix_issue_mcp` | `agents/triage/auto_fix.py` | attempt result: status, reason, PR details | **No** |
+
+What it costs and does, for a client deciding whether to call it:
+
+- Several GitHub requests per call — reading the issue, locating/reading a
+  source PR, committing a candidate fix, opening a PR. Not a lookup; must not
+  be called speculatively.
+- Any PR it opens is always a **draft**, never auto-merged; a human still
+  reviews it.
+- Never raises. When it cannot apply a fix, `status` explains why
+  (`"not_applicable"`, `"blocked"`, `"no_source_pr"`, `"error"`, ...) via a
+  `reason` field, instead of throwing.
+- `source_pr=0` means "not known, find it" — the tool translates that to
+  `None` before calling `agents.triage.auto_fix.auto_fix_issue`, since MCP
+  tool schemas are cleaner without `Optional` parameters.
+- Deliberately excluded from `INTELLIGENCE_TOOLS` in `tool_names.py` — that
+  tuple is asserted read-only by `tests/test_mcp_intelligence.py`, and this
+  tool writes.
+- Same deferred-import discipline as §4b: `agents.triage.auto_fix` reaches
+  into `rag`, which pulls in torch and chromadb, so the import happens inside
+  the function body, not at module scope.
+
+---
+
 ## 5. The shared client — resolved, and why it is configured as it is
 
 This section previously described a fresh `Github(github_token)` per call as an
