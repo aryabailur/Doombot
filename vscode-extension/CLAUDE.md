@@ -330,6 +330,54 @@ or break the core investigation flow."). If you are behind schedule on
 
 ---
 
+## F19 — Auto-Fix PR, and why it lives here
+
+`AUTO_FIX.md` specifies three UI surfaces for auto-fix: a dashboard badge, a
+Chrome extension banner, and MCP. On this branch **only the VS Code surface is
+built** — the dashboard and browser extension are demoed from their own
+branches, so building their halves here would mean editing files two other
+streams own (root `CLAUDE.md` §5) for a view nobody will show.
+
+What was added, and nothing beyond it:
+
+- `doombot.openFixPr`, contributed twice under `view/item/context` — once with
+  `group: "inline"` (the hover button, which is what makes the gesture
+  discoverable in a demo) and once under a named group (the right-click menu).
+  `group: "inline"` alone renders *only* the hover button; the two entries are
+  not redundant.
+- `contextValue` on the row classes in `trees.ts`, set on real rows only. If a
+  `MessageItem` ever gets one, "Open Auto-Fix PR" appears on the row that says
+  "Queue is clear".
+- `FixPrIndex` in `trees.ts` — session cache of which investigations have a
+  draft fix PR, hydrated from the existing poll. No second timer.
+
+This stays inside the folder's rules rather than bending them:
+
+- **No third view.** The badge decorates the two existing trees.
+- **No native re-implementation.** The diff, the evidence and the full chain
+  are not rendered here — "Open investigation" routes to the dashboard, and
+  "Open PR" hands off to GitHub. A menu item plus a toast is not a second
+  design system.
+- **No new contributed colour.** The badge reuses `doombot.success`.
+- **No new dependency.**
+
+### The one trap in it
+
+The fix PR number is recovered from the investigation *chain*, not from a
+field on `InvestigationSummary` — deliberately, because adding a field to
+`api/schemas.py` would be a contract change requiring
+`dashboard/src/lib/types.ts` to move in the same PR (root `CLAUDE.md` §7),
+which is a dashboard file this branch has no business touching.
+
+So the detection contract is: the `fix_pr_opener` step carries a `pr`-type
+evidence entry whose `ref` is the bare PR number. `agents/triage/auto_fixer.py`
+emits `type: "pr"` there **if and only if** a draft PR really exists, and
+carries a comment saying so. If someone later "tidies" that `ref` into a URL,
+the badge silently stops appearing and `tsc` will not notice — same class of
+bug as every row in the contract-traps table in `README.md`.
+
+---
+
 ## Definition of done
 
 - [ ] Extension activates without errors against a running dashboard +

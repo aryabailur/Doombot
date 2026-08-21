@@ -124,6 +124,70 @@ export interface SearchResponse {
   stats: SearchStats
 }
 
+/**
+ * Auto-fix pull requests.
+ *
+ * Mirrors `api/schemas.py`'s `Evidence`, `StepRecord`, `InvestigationDetail`
+ * and `AutoFixResponse` -- hand-mirrored, like everything else in this file,
+ * because this package has no build relationship with the backend.
+ */
+export interface Evidence {
+  // Closed union -- these four are what the agent actually emits.
+  type: 'issue' | 'pr' | 'file' | 'rule'
+  ref: string
+  // Nullable: rule-type evidence (a matched keyword, a threshold note) has
+  // no meaningful score, and the API sends null rather than a misleading 0.
+  score: number | null
+  snippet: string
+}
+
+export interface StepRecord {
+  step_id: string
+  investigation_id: string
+  seq: number
+  name: string
+  title: string
+  status: InvestigationStatus
+  input_summary: string
+  output_summary: string
+  evidence: Evidence[]
+  duration_ms: number
+  started_at: string
+  ended_at: string | null
+}
+
+export interface InvestigationDetail extends InvestigationSummary {
+  steps: StepRecord[]
+  decision_reason: string | null
+  confidence: number | null
+  impact_score: number | null
+}
+
+/**
+ * Mirrors `AutoFixResponse` in api/schemas.py. `reason` is always populated,
+ * including on success, and is the field the UI shows -- every non-`opened`
+ * status is a correct answer the agent reached on purpose (patch no longer
+ * applies, diff spans too many files, writes are disabled), not a failure.
+ */
+export interface AutoFixResponse {
+  status:
+    | 'opened'
+    | 'existing'
+    | 'not_applicable'
+    | 'blocked'
+    | 'no_source_pr'
+    | 'error'
+  reason: string
+  source_pr: number | null
+  pr_number: number | null
+  pr_url: string | null
+  branch: string | null
+  file: string | null
+  changed_lines: number
+  ci: boolean
+  commented: boolean
+}
+
 
 function config() {
   return vscode.workspace.getConfiguration('doombot')
@@ -184,6 +248,18 @@ export function getEscalations(): Promise<Escalation[] | null> {
 
 export function getInvestigations(): Promise<InvestigationSummary[] | null> {
   return getJson<InvestigationSummary[]>(`/api/investigations${repoQuery()}`)
+}
+
+/**
+ * One investigation's full chain -- steps and evidence included.
+ *
+ * Follows the `getJson` null-on-failure convention above: this is called
+ * from `FixPrIndex.hydrate` on a poll timer, not in response to a user
+ * action, so a transient failure should be quietly retried on the next poll
+ * rather than surfaced as an error.
+ */
+export function getInvestigation(id: string): Promise<InvestigationDetail | null> {
+  return getJson<InvestigationDetail>(`/api/investigations/${id}`)
 }
 
 /** Investigate a repository's open issues (the dashboard's Analyse action). */
@@ -249,4 +325,61 @@ export async function searchIssues(
     throw new Error(`The API returned ${response.status}.`)
   }
   return (await response.json()) as SearchResponse
+}
+
+/**
+ * Opens (or reports on) an auto-fix pull request for an investigation.
+ *
+ * Throws rather than returning null, for the same reason `searchIssues` does
+ * above: the user asked for this on purpose, so a request that never
+ * completed (network failure, 404, 500) has to reach them as an error
+ * message. That must not be conflated with a *completed* request that came
+ * back `not_applicable` or `blocked` -- those are correct answers carried in
+ * `AutoFixResponse.status`, handled by the caller, not thrown here.
+ */
+export async function openAutoFixPr(id: string): Promise<AutoFixResponse> {
+  const response = await fetch(
+    `${apiBaseUrl()}/api/investigations/${id}/autofix`,
+    { method: 'POST' },
+  )
+  if (!response.ok) {
+    // FastAPI's default error body is `{ detail: string }`. Surfacing it
+    // turns "The API returned 404." into "Investigation not found." when the
+    // backend sends one -- worth the extra parse attempt.
+    let detail: string | undefined
+    try {
+      const body = (await response.json()) as { detail?: string }
+      detail = body?.detail
+    } catch {
+      // No body, or not JSON -- fall through to the status-only message.
+    }
+    throw new Error(
+      detail
+        ? `The API returned ${response.status}: ${detail}`
+        : `The API returned ${response.status}.`,
+    )
+  }
+  return (await response.json()) as AutoFixResponse
+}
+
+/**
+ * Reads a fix PR number out of an investigation's steps, if one exists.
+ *
+ * This is the agreed contract, not a guess: the `fix_pr_opener` step carries
+ * a `pr`-type evidence entry whose `ref` is the draft PR number as a decimal
+ * string once a PR has been opened. No such step, or a step with no `pr`
+ * evidence on it, means no PR exists -- there is no separate boolean flag on
+ * the investigation to check instead.
+ */
+export function fixPrNumberFrom(detail: InvestigationDetail): number | null {
+  const step = detail.steps.find((s) => s.name === 'fix_pr_opener')
+  if (!step) {
+    return null
+  }
+  const prEvidence = step.evidence.find((e) => e.type === 'pr')
+  if (!prEvidence) {
+    return null
+  }
+  const parsed = Number(prEvidence.ref)
+  return Number.isFinite(parsed) ? parsed : null
 }

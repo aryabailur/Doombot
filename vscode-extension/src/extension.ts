@@ -4,17 +4,25 @@ import {
   createInvestigation,
   dashboardUrl,
   getHealth,
+  openAutoFixPr,
   pollSeconds,
   repository,
   scanRepository,
   searchIssues,
+  type AutoFixResponse,
   type SearchResult,
 } from './api'
-import { EscalationsTreeProvider, InvestigationsTreeProvider } from './trees'
+import {
+  EscalationsTreeProvider,
+  FixPrIndex,
+  InvestigationsTreeProvider,
+  type InvestigationRow,
+} from './trees'
 
 let statusBarItem: vscode.StatusBarItem
 let escalations: EscalationsTreeProvider
 let investigations: InvestigationsTreeProvider
+let fixPrs: FixPrIndex
 let pollTimer: ReturnType<typeof setInterval> | undefined
 let panel: vscode.WebviewPanel | undefined
 
@@ -40,8 +48,9 @@ export function activate(context: vscode.ExtensionContext): void {
   statusBarItem.show()
   context.subscriptions.push(statusBarItem)
 
-  escalations = new EscalationsTreeProvider()
-  investigations = new InvestigationsTreeProvider()
+  fixPrs = new FixPrIndex()
+  escalations = new EscalationsTreeProvider(fixPrs)
+  investigations = new InvestigationsTreeProvider(fixPrs)
 
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider('doombot.escalations', escalations),
@@ -66,6 +75,10 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     vscode.commands.registerCommand('doombot.searchIssues', () =>
       runSearch(context),
+    ),
+    vscode.commands.registerCommand(
+      'doombot.openFixPr',
+      (row?: InvestigationRow) => openFixPr(context, row),
     ),
   )
 
@@ -114,6 +127,17 @@ export function deactivate(): void {
  */
 async function refreshAll(): Promise<void> {
   await Promise.all([escalations.refresh(), investigations.refresh()])
+
+  // Piggybacks on the same poll rather than a second timer. Hydrates off the
+  // investigations tree's summaries specifically: it is the only one of the
+  // two with `decision`, `status` and `repo_name` on every row, which is what
+  // `FixPrIndex.hydrate` needs both to decide what to check and to remember
+  // which repo a discovered PR belongs to.
+  const learnedFixPr = await fixPrs.hydrate(investigations.summaries)
+  if (learnedFixPr) {
+    escalations.redraw()
+    investigations.redraw()
+  }
 
   const repo = repository()
   const health = repo ? await getHealth(repo) : null
@@ -373,6 +397,145 @@ async function runSearch(context: vscode.ExtensionContext): Promise<void> {
         )
       : vscode.window.showErrorMessage('Could not start that investigation.'))
     await refreshAll()
+  }
+}
+
+/**
+ * Opens (or reports on) an auto-fix PR for an investigation.
+ *
+ * Takes either a tree row (the right-click gesture -- the demo path: an
+ * escalation or a recent investigation, both real-row classes in trees.ts
+ * that carry `investigationId`) or nothing, when invoked from the command
+ * palette. The palette case has no row to read an id from, so it offers a
+ * picker instead of silently doing nothing.
+ */
+async function openFixPr(
+  context: vscode.ExtensionContext,
+  row?: InvestigationRow,
+): Promise<void> {
+  let investigationId = row?.investigationId
+
+  if (!investigationId) {
+    // Only a `resolve` investigation can plausibly have a fix to replay --
+    // matches the same rule `FixPrIndex.hydrate` uses, so the picker never
+    // offers something the backend would answer `no_source_pr` for on sight.
+    const candidates = investigations.summaries.filter(
+      (i) => i.decision === 'resolve',
+    )
+    if (candidates.length === 0) {
+      void vscode.window.showInformationMessage(
+        'No investigation has a known fix to replay yet. An auto-fix PR is only offered once an investigation resolves an issue by finding a similar, already-fixed one.',
+      )
+      return
+    }
+
+    const picked = await vscode.window.showQuickPick(
+      candidates.map((candidate) => ({
+        label: `#${candidate.number} ${candidate.title}`,
+        description: candidate.repo_name,
+        candidate,
+      })),
+      {
+        title: 'Open Auto-Fix PR',
+        placeHolder: 'Pick a resolved investigation',
+      },
+    )
+    if (!picked) {
+      return
+    }
+    investigationId = picked.candidate.investigation_id
+  }
+
+  const response = await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: 'Opening auto-fix PR…',
+      cancellable: false,
+    },
+    async () => {
+      try {
+        return await openAutoFixPr(investigationId!)
+      } catch (cause) {
+        void vscode.window.showErrorMessage(
+          `Doombot auto-fix failed: ${
+            cause instanceof Error ? cause.message : 'the API is unreachable'
+          }`,
+        )
+        return null
+      }
+    },
+  )
+  if (!response) {
+    return
+  }
+
+  await handleAutoFixResponse(context, investigationId, response)
+}
+
+/**
+ * Reports an `AutoFixResponse`, branching on `status` exactly as the
+ * contract specifies -- each status is a distinct, correct outcome, not a
+ * success/failure pair, so each gets its own message severity and action.
+ */
+async function handleAutoFixResponse(
+  context: vscode.ExtensionContext,
+  investigationId: string,
+  response: AutoFixResponse,
+): Promise<void> {
+  switch (response.status) {
+    case 'opened':
+    case 'existing': {
+      if (response.pr_number !== null) {
+        // The repo isn't on `AutoFixResponse` itself, so it is looked up from
+        // the investigations tree's own summaries rather than guessed from
+        // `doombot.repository` configuration, which need not be the repo this
+        // investigation belongs to. If the row isn't in the last poll's top
+        // 15 (unlikely for something just acted on), the badge simply
+        // catches up on the next `hydrate` instead of appearing immediately.
+        const summary = investigations.summaries.find(
+          (i) => i.investigation_id === investigationId,
+        )
+        if (summary) {
+          fixPrs.record(investigationId, response.pr_number, summary.repo_name)
+          escalations.redraw()
+          investigations.redraw()
+        }
+      }
+      // Say "opened" vs "already open" honestly -- reporting a pre-existing
+      // PR as newly created would misrepresent what Doombot just did.
+      const verb = response.status === 'opened' ? 'Opened' : 'Already open:'
+      const where = response.file ? ` for ${response.file}` : ''
+      const choice = await vscode.window.showInformationMessage(
+        `${verb} fix PR #${response.pr_number}${where}.`,
+        'Open PR',
+      )
+      if (choice === 'Open PR' && response.pr_url) {
+        void vscode.env.openExternal(vscode.Uri.parse(response.pr_url))
+      }
+      break
+    }
+    case 'blocked':
+      // What DEMO_MODE=1 returns, and what unattended auto-fix being opt-in
+      // returns. Not an error -- misreporting it as one would send someone
+      // debugging a setting that is working exactly as designed.
+      void vscode.window.showWarningMessage(response.reason)
+      break
+    case 'not_applicable':
+    case 'no_source_pr': {
+      // The agent declining to patch is a real, correct answer, and the
+      // reason is the interesting part -- shown verbatim, not paraphrased.
+      const choice = await vscode.window.showInformationMessage(
+        response.reason,
+        'Open investigation',
+      )
+      if (choice === 'Open investigation') {
+        openDashboard(context, `/investigations/${investigationId}`)
+      }
+      break
+    }
+    case 'error':
+      void vscode.window.showErrorMessage(response.reason)
+      break
   }
 }
 

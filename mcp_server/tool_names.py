@@ -41,3 +41,16 @@ INTELLIGENCE_TOOLS = (
     LIST_INVESTIGATIONS,
     GET_ISSUE_GRAPH,
 )
+
+# --- Auto-Fix PR --------------------------------------------------------
+#
+# AUTO_FIX.md calls this tool `auto_fix_issue`; the `_mcp` suffix here follows
+# the convention every other tool in this file already uses (root CLAUDE.md
+# rule 5 exists precisely to stop this kind of name drift, so the deviation
+# from the doc's name is noted here rather than left silent).
+#
+# This is the first tool in this file that writes to a repository beyond
+# posting a comment or a label: it can open a pull request. It is
+# deliberately NOT added to INTELLIGENCE_TOOLS -- that tuple is asserted
+# read-only by tests/test_mcp_intelligence.py, and this tool is not.
+AUTO_FIX_ISSUE = "auto_fix_issue_mcp"

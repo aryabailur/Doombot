@@ -50,6 +50,8 @@ system — native chrome uses the editor's own theme colours.
 | `Doombot: Open Dashboard` | Webview panel framing the running dashboard |
 | `Doombot: Trigger Repository Scan` | `POST /api/investigations` — same endpoint the dashboard uses |
 | `Doombot: Refresh Escalations` | Immediate re-poll |
+| `Doombot: Open Auto-Fix PR` | `POST /api/investigations/{id}/autofix` — replays a known fix as a draft PR (F19) |
+| Fix-PR badge | A row with a draft fix PR shows `· fix PR #302` and opens the PR instead of the dashboard |
 
 Clicking any tree item opens the dashboard at that investigation. Full
 evidence exploration lives there by design.
@@ -130,5 +132,41 @@ and `docs/DESIGN.md` §4 treats reimplementing dashboard UI natively as a spec
 conflict — so this follows the same rule as every other rich view here: open
 the dashboard.
 
-F16 (auto-resolution) has no extension surface yet. When a resolution is
-posted it will appear in the escalations tree like any other agent action.
+F16 (auto-resolution) has no extension surface of its own. When a resolution
+is posted it appears in the escalations tree like any other agent action.
+
+### `Doombot: Open Auto-Fix PR` (F19)
+
+The extension is the **only** surface for auto-fix on this branch — the
+dashboard and Chrome badges described in `AUTO_FIX.md` live on their own
+branches. Right-click an escalation or a recent investigation (or use the
+hover button, or the command palette) and Doombot replays the merged diff
+from the past fix it found onto the current codebase, on a branch, as a
+**draft** pull request.
+
+Native chrome, not a webview — same reasoning as the search QuickPick above.
+A menu item, a progress notification and a toast with an "Open PR" button is
+what this interaction *is*; an iframe of it would be slower and need a mouse.
+
+Every one of the five non-`opened` statuses is a correct answer, not a
+failure, and the extension shows the API's `reason` verbatim rather than
+paraphrasing it:
+
+| Status | What the user sees |
+|---|---|
+| `opened` | Info toast, `Opened fix PR #302 for src/app.py.`, "Open PR" button |
+| `existing` | Same, but says `Already open:` — never claims it just created one |
+| `not_applicable` | Info toast with the guardrail's reason, "Open investigation" button |
+| `no_source_pr` | Info toast — no past fix was found to replay |
+| `blocked` | **Warning**, not an error. `DEMO_MODE=1` returns this, and so does auto-fix being off; reporting it as a failure would send someone debugging a working setting |
+| `error` | Error toast with the reason |
+
+**The badge is read out of the chain, not a dedicated field.** There is no
+`fix_pr` column on `InvestigationSummary`; `FixPrIndex` fetches
+`GET /api/investigations/{id}` for investigations that are
+`decision === 'resolve' && status === 'done'` and looks for a `pr`-type
+evidence entry on the `fix_pr_opener` step, whose `ref` is the bare PR
+number. Three things keep that from becoming a polling problem, and all three
+are load-bearing: only resolved-and-finished investigations are candidates, a
+confirmed *absence* is cached permanently (otherwise every poll re-checks
+every resolve forever), and at most 5 details are fetched per tick.

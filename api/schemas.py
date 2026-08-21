@@ -316,3 +316,43 @@ class SearchResponse(BaseModel):
     intent: SearchIntent
     results: list[SearchResult]
     stats: SearchStats
+
+
+# ---------------------------------------------------------------------------
+# Auto-fix pull requests. Additive: no existing model changes, so no frontend
+# mirror is invalidated and the contract freeze in root CLAUDE.md 7 holds.
+# ---------------------------------------------------------------------------
+
+
+class AutoFixResponse(BaseModel):
+    """The outcome of replaying a known fix onto the current codebase.
+
+    `reason` is always populated, including on success, and is the field a UI
+    should show. Every non-`opened` status is a *correct* answer the agent
+    reached on purpose -- the patch no longer applies, the diff spans too many
+    files, writes are disabled -- and collapsing those into "failed" would hide
+    the one piece of information the maintainer actually wants.
+
+    `status` values:
+      opened          a draft pull request was created
+      existing        one was already open for this issue; nothing was written
+      not_applicable  a guardrail refused the patch; see reason
+      blocked         writes are disabled (DEMO_MODE, or auto-fix not enabled)
+      no_source_pr    no past fix was found to replay
+      error           the attempt failed; see reason
+    """
+
+    status: Literal[
+        "opened", "existing", "not_applicable", "blocked", "no_source_pr", "error"
+    ]
+    reason: str
+    source_pr: int | None = None
+    pr_number: int | None = None
+    pr_url: str | None = None
+    branch: str | None = None
+    file: str | None = None
+    changed_lines: int = 0
+    # Whether the repository runs CI on pull requests, so the caller can say
+    # "check the test results" rather than implying Doombot verified anything.
+    ci: bool = False
+    commented: bool = False
