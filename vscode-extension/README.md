@@ -52,6 +52,7 @@ system — native chrome uses the editor's own theme colours.
 | `Doombot: Refresh Escalations` | Immediate re-poll |
 | `Doombot: Open Auto-Fix PR` | `POST /api/investigations/{id}/autofix` — replays a known fix as a draft PR (F19) |
 | Fix-PR badge | A row with a draft fix PR shows `· fix PR #302` and opens the PR instead of the dashboard |
+| Regression toast | Fires when the watcher finds a merged fix that a commit undid (F20) |
 
 Clicking any tree item opens the dashboard at that investigation. Full
 evidence exploration lives there by design.
@@ -160,6 +161,35 @@ paraphrasing it:
 | `no_source_pr` | Info toast — no past fix was found to replay |
 | `blocked` | **Warning**, not an error. `DEMO_MODE=1` returns this, and so does auto-fix being off; reporting it as a failure would send someone debugging a working setting |
 | `error` | Error toast with the reason |
+
+### Regression toasts (F20)
+
+The backend watcher replays every recent merged fix against the current code;
+one that applies cleanly again means the lines it added are gone. It files an
+issue and opens a draft PR restoring it, with no issue filed by a person and no
+button clicked. The extension's job is to tell you it happened.
+
+`pollRegressions` rides the existing 15s poll — no second timer — reading
+`GET /api/repos/{owner}/{repo}/regressions`, and toasts by status:
+
+| Status | Toast |
+|---|---|
+| `fix_opened` | **Warning** — names the file and both numbers, with **Open PR** and **Open issue** |
+| `issue_filed` | **Warning** — no PR yet, **Open issue** only |
+| `detected` | Info with the reason verbatim; nothing was written, so no buttons |
+| `blocked` | Info, not an error — this is what `DEMO_MODE` returns |
+| `error` | Error with the reason |
+
+Two things keep it from becoming noise, and both are the `lastCriticalCount`
+lesson applied again: findings are keyed on `sourcePR:headSha` so a poll cannot
+re-announce the same one, and the **first** poll seeds everything as already
+seen — establishing a baseline is not an event. More than three unseen findings
+in one poll collapse into a single toast with `+N more`, because a commit
+reverting six fixes must not produce six popups.
+
+The whole block sits in its own `try/catch` at the end of `refreshAll`: the
+status bar and trees are the extension's primary job and must keep working even
+if this bonus breaks.
 
 **The badge is read out of the chain, not a dedicated field.** There is no
 `fix_pr` column on `InvestigationSummary`; `FixPrIndex` fetches

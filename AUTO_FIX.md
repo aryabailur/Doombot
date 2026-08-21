@@ -86,6 +86,74 @@ All of these are standard PyGithub operations. No git clone, no local filesystem
 
 ---
 
+## F20 — Regression watching, the inverse of this feature
+
+Auto-fix starts from an issue and hunts for a past fix. Regression watching
+starts from a **commit** and asks which past fix that commit undid. Same
+machinery, run backwards.
+
+The detection is one observation, with no model and no heuristic in it. Replay
+a merged pull request's own diff against the file as it stands today, using
+`apply_hunks` unchanged:
+
+| `apply_hunks` says | Meaning |
+|---|---|
+| "the fix is already applied" | healthy — the fix is still there |
+| applies cleanly | **regression** — a merged patch cannot apply twice unless what it added is gone |
+| anything else | the file moved on; nothing can be told |
+
+`agents/triage/regression.py`. It runs as the first subtask of the existing
+monitoring cycle (`api/monitor.py`), ahead of indexing and investigation, so an
+issue it files is embedded and triaged in the same pass. When it finds a
+regression it files an issue describing it and — when `DOOMBOT_AUTO_FIX=1` —
+opens the draft PR restoring the fix. Nobody filed the issue; nobody clicked.
+
+**No embedding model is on this path.** `select_target_file` scores hunks for
+relevance to an issue's text, and there is no issue here, so relevance would be
+noise. `select_single_file` is a plain structural reduction instead — single
+non-test file, under 20 changed lines — which is what makes it affordable on a
+30-second poll.
+
+Measured against a real repository: baseline sweep 8.3s caching three candidate
+fixes, then a commit that removed a two-line guard was detected, an issue filed
+and a draft PR opened in 28.8s. It reported only the fix the commit touched,
+ignoring two other files that were also regressed.
+
+### The four things that are load-bearing
+
+- **The first sweep detects nothing.** It records a baseline HEAD, because a
+  watcher reports what changed while it was watching — a full scan at startup
+  would file issues about regressions that predate the process.
+- **The baseline sweep pre-loads the candidate cache** (a listing plus a diff
+  read per candidate, ~40 requests). Paying that while nobody waits is why the
+  detecting cycle is fast.
+- **`already_reported` matches an HTML-comment marker in open issues.** Without
+  it, a persistent regression files a fresh issue every thirty seconds —
+  exactly the noise this product exists to reduce.
+- **`DOOMBOT_WATCH_REGRESSIONS=1` is required, and `DEMO_MODE=1` overrides it.**
+  This is the only path that writes to GitHub with no human in the loop at all,
+  so it is opt-in, on top of monitoring already being opt-in via
+  `DOOMBOT_MONITOR_REPOS`.
+
+### One non-obvious constraint
+
+The generated issue title and body must avoid every word
+`agents/triage/security_scanner.py` matches as a substring — "auth", "token",
+"secret", "bypass", "overflow" and the rest. Otherwise the agent's own
+regression report gets escalated as a suspected vulnerability and never reaches
+the resolution path. There is a comment in the code saying so; nothing about it
+is guessable.
+
+### What it cannot do
+
+It cannot notice a *novel* bug, and it cannot patch a newly added file — both
+for the same reason auto-fix cannot: the patch is a past PR's diff, aimed at
+the path that PR touched. A brand-new bug has no fix to replay and correctly
+returns nothing. Making it handle those would mean a model adapting a diff,
+which throws away the claim that makes this credible.
+
+---
+
 ## Deviations from the original spec, and why
 
 Recorded here rather than left implicit, because the next person will compare
