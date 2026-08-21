@@ -29,6 +29,7 @@ def decider(state):
     issue_number = state["issue_number"]
 
     tool_calls = []
+    comment_apply_failed = False
     top_duplicate = None
     top_duplicate_score = -1.0
     for entry in duplicates:
@@ -56,7 +57,11 @@ def decider(state):
             )
             tool_calls.append(POST_ISSUE_COMMENT)
         except Exception:
-            pass
+            # GitHub API failure (bad token, rate limit, closed issue, etc.)
+            # must not crash the graph — comment_apply_failed stays honest
+            # about the write never actually happening (mirrors labeler.py's
+            # applied_ok pattern).
+            comment_apply_failed = True
 
     elif len(security_findings) > 0 and impact_score >= SECURITY_IMPACT_THRESHOLD:
         action = "escalate"
@@ -91,7 +96,7 @@ def decider(state):
             )
             tool_calls.append(POST_ISSUE_COMMENT)
         except Exception:
-            pass
+            comment_apply_failed = True
 
     else:
         action = "hold"
@@ -107,4 +112,18 @@ def decider(state):
             "snippet": reason,
         }
     ]
+    if comment_apply_failed:
+        # Mirrors labeler.py's applied/apply_failed convention so the
+        # dashboard's existing "GitHub Write Failed" check (which looks for
+        # a decision-type evidence item with this exact snippet) can detect
+        # a real comment-post failure instead of only ever seeing an empty
+        # tool_calls list with no explanation.
+        evidence.append(
+            {
+                "type": "decision",
+                "ref": action,
+                "score": confidence,
+                "snippet": "apply_failed",
+            }
+        )
     return patch, evidence, tool_calls

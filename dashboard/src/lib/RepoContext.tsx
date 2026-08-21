@@ -11,12 +11,24 @@ const RepoContext = createContext<RepoContextValue | null>(null);
 
 const DEFAULT_REPO = "octocat/Hello-World";
 
+// A bare "owner/repo" shape check — this is the one real gate every caller
+// of setRepoName goes through (Sidebar.tsx's own input validation guards
+// its UI, but doesn't stop something else calling setRepoName directly, or
+// a stale unvalidated value already sitting in localStorage from before
+// this check existed — both were confirmed as the real source of malformed
+// "owner"-with-no-slash rows in health_scores/investigations).
+function isValidRepoName(name: string): boolean {
+  return /^[\w.-]+\/[\w.-]+$/.test(name);
+}
+
 export function RepoProvider({ children }: { children: ReactNode }) {
-  const [repoName, setRepoNameState] = useState(
-    () => localStorage.getItem("repoguardian:repo") ?? DEFAULT_REPO
-  );
+  const [repoName, setRepoNameState] = useState(() => {
+    const stored = localStorage.getItem("repoguardian:repo");
+    return stored && isValidRepoName(stored) ? stored : DEFAULT_REPO;
+  });
 
   function setRepoName(name: string) {
+    if (!isValidRepoName(name)) return;
     setRepoNameState(name);
     localStorage.setItem("repoguardian:repo", name);
   }
