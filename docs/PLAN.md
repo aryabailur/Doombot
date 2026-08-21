@@ -5,7 +5,7 @@
 Doombot today is a ~450-line weekend prototype: a working-in-principle LangGraph PR-review
 agent (fetcher → reviewer → test_writer → summarizer) backed by a FastMCP stdio server over
 PyGithub, with a Chroma + MiniLM RAG index over repo files. It runs on **Groq
-llama-3.3-70b-versatile**, not OpenAI.
+openai/gpt-oss-120b** (Groq-hosted, not OpenAI's API).
 
 `finalFeatures.md` and `TECHSTACK.md` describe a far larger system — issue triage, escalation
 queues, health scoring, a React dashboard, a VS Code extension. Neither doc matches the code:
@@ -71,7 +71,7 @@ pydantic
 ```
 GITHUB_TOKEN=ghp_xxx
 GROQ_API_KEY=gsk_xxx
-GROQ_MODEL=llama-3.3-70b-versatile
+GROQ_MODEL=openai/gpt-oss-120b
 DB_PATH=./repoguardian.db
 CHROMA_DIR=./chroma_db
 DEMO_MODE=0

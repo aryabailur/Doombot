@@ -48,7 +48,7 @@ decorator, the WebSocket layer, the SQLite replay, and the evidence-first UI.
          └──────────────────────────┘
                  │
                  ▼            ┌─────────────┐
-            GitHub API        │  Groq LLM   │  llama-3.3-70b-versatile
+            GitHub API        │  Groq LLM   │  openai/gpt-oss-120b
                               └─────────────┘
 ```
 

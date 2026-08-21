@@ -7,7 +7,7 @@ and — this is the point — **shows its work**: a live, streaming, step-by-ste
 reasoning trace that cites its evidence, escalates only what genuinely needs a
 human, and asks before it acts.
 
-Runs on **Groq `llama-3.3-70b-versatile`** with **local MiniLM embeddings**. No
+Runs on **Groq `openai/gpt-oss-120b`** with **local MiniLM embeddings**. No
 OpenAI, no API bill.
 
 ```
@@ -146,7 +146,7 @@ python -m scripts.seed_demo               # demo fallback data
 
 ## Stack
 
-Python 3.14 · LangGraph · Groq `llama-3.3-70b-versatile` · MCP (FastMCP) ·
+Python 3.14 · LangGraph · Groq `openai/gpt-oss-120b` · MCP (FastMCP) ·
 PyGithub · ChromaDB + `all-MiniLM-L6-v2` · FastAPI · SQLite ·
 React + Vite + TypeScript + Tailwind + shadcn/ui · VS Code webview
 

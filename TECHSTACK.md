@@ -24,11 +24,13 @@ across both frontend surfaces means any of the four of us can work on either.
 
 ## AI and ML
 
-**Groq (`langchain-groq`)** — `llama-3.3-70b-versatile` for every LLM call:
+**Groq (`langchain-groq`)** — `openai/gpt-oss-120b` for every LLM call:
 classification, severity assessment, recommendations, PR review, summaries. Chosen
-over OpenAI for three reasons that matter at a hackathon: it's free, it's
-dramatically faster per token, and it needs no billing setup. Model is read from
-`GROQ_MODEL` so it's swappable.
+over OpenAI's API for three reasons that matter at a hackathon: it's free, it's
+dramatically faster per token, and it needs no billing setup. (Originally
+`llama-3.3-70b-versatile`, retired by Groq — swapped project-wide.) Every call
+site hardcodes the model string at module scope; `GROQ_MODEL` exists in `.env`
+but nothing currently reads it at runtime.
 
 **LangGraph** — agent orchestration. Two `StateGraph`s over one shared `TypedDict`:
 the existing PR-review graph and the new issue-triage graph. Chosen over raw
@@ -111,7 +113,7 @@ escalation tree view, and a webview onto the dashboard. P2 stretch scope.
 ```bash
 GITHUB_TOKEN=ghp_...                     # repo scope
 GROQ_API_KEY=gsk_...
-GROQ_MODEL=llama-3.3-70b-versatile
+GROQ_MODEL=openai/gpt-oss-120b
 
 DB_PATH=./doombot.db
 CHROMA_DIR=./chroma_db

@@ -8,7 +8,7 @@ from mcp_server.tool_names import POST_COMMENT
 import asyncio
 
 load_dotenv()
-llm = ChatGroq(model="llama-3.3-70b-versatile")
+llm = ChatGroq(model="openai/gpt-oss-120b")
 
 def summarizer_node(state:GraphState):
     review_metadata=state["review_metadata"]

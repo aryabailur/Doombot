@@ -14,7 +14,7 @@ because two very real failure modes can happen at the exact moment you're
 standing in front of judges:
 
 1. **Groq rate-limits you.** The whole agent pipeline runs on
-   `llama-3.3-70b-versatile`. A free-tier or shared rate limit hit mid-demo
+   `openai/gpt-oss-120b`. A free-tier or shared rate limit hit mid-demo
    means the live investigation you just triggered hangs or errors, live,
    on screen.
 2. **Venue wifi dies.** No GitHub API, no Groq API, nothing. This is a
