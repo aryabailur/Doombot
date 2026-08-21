@@ -210,19 +210,29 @@ async def get_repo_health(owner: str, repo: str) -> HealthResponse:
     score = _weighted_score(breakdown)
 
     history_rows = db.get_health_history(repo_name, limit=30)
-    if history_rows:
-        history = [HealthPoint(ts=row["recorded_at"], score=row["score"]) for row in history_rows]
-    else:
-        history = [HealthPoint(ts=_now_iso(), score=score)]
 
-    db.record_health_score(
-        repo_name=repo_name,
-        score=score,
-        security=breakdown.security,
-        staleness=breakdown.staleness,
-        duplication=breakdown.duplication,
-        responsiveness=breakdown.responsiveness,
-    )
+    # This endpoint is polled frequently (every page load, plus every 10s
+    # from Command Center) but the underlying score only actually changes
+    # when new investigations complete. Recording a row on every poll
+    # produced runs of near-simultaneous, byte-identical "snapshots" — 30
+    # duplicate points a few seconds apart read as a real 30-point flat
+    # trend and inflated forecast confidence, when it was really just
+    # request volume. Only persist a new point when the score has moved
+    # (or there's no history yet) so history reflects real score changes.
+    last_recorded_score = history_rows[-1]["score"] if history_rows else None
+    if last_recorded_score is None or round(last_recorded_score, 1) != round(score, 1):
+        db.record_health_score(
+            repo_name=repo_name,
+            score=score,
+            security=breakdown.security,
+            staleness=breakdown.staleness,
+            duplication=breakdown.duplication,
+            responsiveness=breakdown.responsiveness,
+        )
+        history = [HealthPoint(ts=row["recorded_at"], score=row["score"]) for row in history_rows]
+        history.append(HealthPoint(ts=_now_iso(), score=score))
+    else:
+        history = [HealthPoint(ts=row["recorded_at"], score=row["score"]) for row in history_rows]
 
     open_investigations = sum(
         1 for i in db.list_investigations() if i["repo_name"] == repo_name and i["status"] == "running"
@@ -232,25 +242,121 @@ async def get_repo_health(owner: str, repo: str) -> HealthResponse:
     return HealthResponse(score=score, breakdown=breakdown, history=history, forecast=forecast)
 
 
+BRIEF_WINDOW_DAYS = 7
+BRIEF_TOP_N = 5
+
+
+def _parse_iso(ts: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(ts)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    except (ValueError, TypeError):
+        return None
+
+
 @router.get("/api/brief/{owner}/{repo}", response_model=BriefResponse)
 async def get_brief(owner: str, repo: str) -> BriefResponse:
+    """A real 7-day window over this repo's investigations (the page is
+    literally titled "Weekly Brief" — the previous implementation summarized
+    all-time totals with no date filter at all, which is a mislabeling bug,
+    not a design choice). Every figure below traces to a real row; sections
+    with nothing real to show are omitted rather than padded."""
     repo_name = f"{owner}/{repo}"
-    investigations = [i for i in db.list_investigations() if i["repo_name"] == repo_name]
-    total = len(investigations)
-    escalated = sum(1 for i in investigations if i["decision"] == "escalate")
-    duplicates = sum(1 for i in investigations if i["decision"] == "close_as_duplicate")
-    resolved = sum(1 for i in investigations if i["status"] == "done")
+    now = datetime.now(timezone.utc)
+    window_start = now.timestamp() - BRIEF_WINDOW_DAYS * 86400
 
-    markdown = f"""# Weekly Brief: {repo_name}
+    all_investigations = [i for i in db.list_investigations() if i["repo_name"] == repo_name]
+    window_investigations = [
+        i
+        for i in all_investigations
+        if (parsed := _parse_iso(i["created_at"])) is not None and parsed.timestamp() >= window_start
+    ]
 
-## Summary
-{total} investigations recorded. {resolved} resolved automatically, {escalated} escalated for human review.
+    # Same repeated-issue dedup rule already applied to Command Center's
+    # attention cards: list_investigations() is newest-first, so keeping the
+    # first occurrence per issue number keeps the most recent re-investigation.
+    seen_numbers: set[int] = set()
+    deduped_investigations = []
+    for inv in window_investigations:
+        if inv["number"] in seen_numbers:
+            continue
+        seen_numbers.add(inv["number"])
+        deduped_investigations.append(inv)
+    window_investigations = deduped_investigations
 
-## Highlights
-- {escalated} investigation(s) escalated for human review
-- {duplicates} issue(s) closed as duplicates
-- {total - escalated - duplicates} handled by other decisions (follow-up, hold, auto-comment)
-"""
+    total = len(window_investigations)
+    escalated_invs = [i for i in window_investigations if i["decision"] == "escalate"]
+    duplicate_invs = [i for i in window_investigations if i["decision"] == "close_as_duplicate"]
+    resolved = sum(1 for i in window_investigations if i["status"] == "done")
+    other = total - len(escalated_invs) - len(duplicate_invs)
+
+    sections = [f"# Weekly Brief: {repo_name}", f"Last {BRIEF_WINDOW_DAYS} days"]
+
+    if total == 0:
+        sections.append(
+            "\n## Summary\nNo investigations were run against this repository in the "
+            f"last {BRIEF_WINDOW_DAYS} days."
+        )
+    else:
+        sections.append(
+            f"\n## Summary\n{total} investigation(s) in the last {BRIEF_WINDOW_DAYS} days. "
+            f"{resolved} resolved automatically, {len(escalated_invs)} escalated for human review."
+        )
+        sections.append(
+            "\n## Highlights\n"
+            f"- {len(escalated_invs)} investigation(s) escalated for human review\n"
+            f"- {len(duplicate_invs)} issue(s) closed as duplicates\n"
+            f"- {other} handled by other decisions (follow-up, hold, auto-comment)"
+        )
+
+    # Real health score + trend — already computed elsewhere in this file,
+    # reused here rather than re-derived.
+    breakdown = _compute_health_breakdown(repo_name)
+    score = _weighted_score(breakdown)
+    history_rows = db.get_health_history(repo_name, limit=30)
+    history = [HealthPoint(ts=row["recorded_at"], score=row["score"]) for row in history_rows]
+    forecast = _compute_forecast(history, sum(1 for i in all_investigations if i["status"] == "running"))
+    health_lines = [f"\n## Project Health\nCurrent score: {score}/100."]
+    if forecast is not None:
+        health_lines.append(f"Trend: {forecast.trend} — {forecast.reason}")
+    sections.append(" ".join(health_lines))
+
+    # Real escalated issues with their actual decision_reason — not just a
+    # count. Sorted newest first, capped so the brief stays skimmable.
+    if escalated_invs:
+        lines = ["\n## Escalated This Week"]
+        for inv in escalated_invs[:BRIEF_TOP_N]:
+            reason = inv.get("decision_reason") or "No reason recorded."
+            lines.append(f"- #{inv['number']} {inv.get('title') or ''} — {reason}")
+        if len(escalated_invs) > BRIEF_TOP_N:
+            lines.append(f"- …and {len(escalated_invs) - BRIEF_TOP_N} more.")
+        sections.append("\n".join(lines))
+
+    # Real duplicate matches with their actual similarity score, pulled from
+    # duplicate_detector's recorded evidence — not fabricated.
+    duplicate_matches: list[tuple[dict, float, str]] = []
+    for inv in duplicate_invs:
+        try:
+            steps = db.get_steps(inv["id"])
+        except Exception:
+            logger.exception("get_steps failed for investigation %s while building brief", inv["id"])
+            steps = []
+        for step in steps:
+            if step.get("name") != "duplicate_detector":
+                continue
+            for ev in step.get("evidence", []):
+                if ev.get("type") == "duplicate":
+                    duplicate_matches.append((inv, ev.get("score") or 0.0, ev.get("snippet") or ""))
+    if duplicate_matches:
+        duplicate_matches.sort(key=lambda t: t[1], reverse=True)
+        lines = ["\n## Top Duplicate Matches"]
+        for inv, dup_score, snippet in duplicate_matches[:BRIEF_TOP_N]:
+            lines.append(f"- #{inv['number']} matched at {dup_score:.0%} — {snippet}")
+        sections.append("\n".join(lines))
+
+    markdown = "\n".join(sections) + "\n"
     return BriefResponse(markdown=markdown, generated_at=_now_iso())
 
 
