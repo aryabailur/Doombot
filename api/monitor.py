@@ -30,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 
 from api import runner, ws
 from memory import repo
@@ -57,6 +58,30 @@ def interval_seconds() -> int:
         return 120
 
 
+def regression_interval_seconds() -> int:
+    """How often to run the regression check on its own, between full scans.
+
+    Defaults to `interval_seconds()`, so an unconfigured deployment behaves
+    exactly as before: one cadence, everything together.
+
+    Floor of 5s rather than 30s because this subtask is not the expensive one.
+    A full cycle re-indexes the backlog and recomputes health -- roughly ten
+    GitHub requests, which at a 10s cadence would be ~4300/hour against a
+    5000/hour quota shared with investigations and the code graph. The
+    regression check, when HEAD has not moved, is a single `get_branch` call:
+    one request, returning immediately. Running only that every few seconds
+    costs ~720/hour, and is the difference between noticing a commit in
+    seconds and noticing it after a full interval.
+    """
+    try:
+        configured = int(os.getenv("DOOMBOT_REGRESSION_INTERVAL", "0"))
+    except ValueError:
+        return interval_seconds()
+    if configured <= 0:
+        return interval_seconds()
+    return max(5, configured)
+
+
 def enabled() -> bool:
     """Monitoring is opt-in via configuration.
 
@@ -81,6 +106,40 @@ async def _already_investigated(repo_name: str, number: int) -> bool:
     return False
 
 
+async def check_regressions(repo_name: str) -> list[dict]:
+    """The regression subtask on its own, so it can run between full scans.
+
+    Cheap by design: when the default branch has not moved this is one
+    `get_branch` call and an immediate return, which is what makes it safe to
+    call every few seconds (see `regression_interval_seconds`).
+
+    Never raises -- it is called from the poll loop, where an exception would
+    end monitoring for every repository, not only this one.
+    """
+    try:
+        from agents.triage.regression import sweep
+
+        findings = await asyncio.to_thread(sweep, repo_name)
+    except Exception:
+        logger.exception("regression subtask failed for %s", repo_name)
+        return []
+
+    for finding in findings:
+        await ws.broadcast({
+            "type": "activity",
+            "data": {
+                "ts": finding.get("detected_at", ""),
+                "repo_name": repo_name,
+                "message": (
+                    f"Regression in {finding.get('file', '?')} — the fix from "
+                    f"#{finding.get('source_pr', '?')} is no longer present"
+                ),
+                "severity": "warning",
+            },
+        })
+    return findings
+
+
 async def _scan_repo(repo_name: str) -> None:
     """One monitoring cycle for one repository."""
     from mcp_server.github_client import get_issues
@@ -97,27 +156,7 @@ async def _scan_repo(repo_name: str) -> None:
     #     before anything looks at it.
     #   - before index, so this cycle's indexing embeds the new issue rather
     #     than leaving it invisible to duplicate checks until the next scan.
-    try:
-        from agents.triage.regression import sweep
-
-        findings = await asyncio.to_thread(sweep, repo_name)
-    except Exception:
-        logger.exception("regression subtask failed for %s", repo_name)
-        findings = []
-
-    for finding in findings:
-        await ws.broadcast({
-            "type": "activity",
-            "data": {
-                "ts": finding.get("detected_at", ""),
-                "repo_name": repo_name,
-                "message": (
-                    f"Regression in {finding.get('file', '?')} — the fix from "
-                    f"#{finding.get('source_pr', '?')} is no longer present"
-                ),
-                "severity": "warning",
-            },
-        })
+    await check_regressions(repo_name)
 
     # --- subtask: refresh the RAG index ---------------------------------
     # Done before investigating, so a new issue can be compared against
@@ -174,15 +213,29 @@ async def _loop() -> None:
     repos = monitored_repos()
     logger.info("monitoring %s every %ss", repos, interval_seconds())
 
+    # Two cadences, not one. A full scan re-indexes the backlog, recomputes
+    # health and investigates new issues -- affordable every 30s or more, not
+    # every 5s. The regression check is a single request when nothing has
+    # changed, so it runs in between.
+    #
+    # With DOOMBOT_REGRESSION_INTERVAL unset the two cadences are equal and
+    # this behaves exactly as the single-cadence loop it replaced.
+    last_full = 0.0
     while True:
+        due_full = (time.monotonic() - last_full) >= interval_seconds()
         for repo_name in monitored_repos():
             try:
-                await _scan_repo(repo_name)
+                if due_full:
+                    await _scan_repo(repo_name)
+                else:
+                    await check_regressions(repo_name)
             except Exception:
                 # One repository failing must not stop the loop -- otherwise a
                 # single bad config entry silently ends all monitoring.
                 logger.exception("scan failed for %s", repo_name)
-        await asyncio.sleep(interval_seconds())
+        if due_full:
+            last_full = time.monotonic()
+        await asyncio.sleep(regression_interval_seconds())
 
 
 async def start() -> None:
