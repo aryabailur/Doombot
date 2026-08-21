@@ -286,7 +286,7 @@ export function LensPanel() {
               {!demoMode && <span aria-hidden="true">●</span>} Live GitHub
             </button>
             <button type="button" className={demoMode ? 'is-active' : ''} aria-pressed={demoMode} onClick={() => setDemoMode(true)}>
-              {demoMode && <span aria-hidden="true">●</span>} Demo repository
+              {demoMode && <span aria-hidden="true">●</span>} Repository
             </button>
           </div>
 

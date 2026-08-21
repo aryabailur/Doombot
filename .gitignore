@@ -22,3 +22,4 @@ dist/
 vscode-extension/out/
 *.vsix
 .DS_Store
+tmp/
