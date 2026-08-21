@@ -136,6 +136,23 @@ def _resolution_context(repo_name: str, number: int) -> str | None:
     return None
 
 
+def _old_issue_body(repo_name: str, number: int) -> str:
+    """The old issue's own body, as a second place to look for its fix PR.
+
+    Separate from `_resolution_context`, which deliberately returns only a
+    substantive closing comment. A `#123` reference is often in the body ("this
+    is tracked in #145") where that filter would never see it, and looking there
+    costs one cached call. Never raises -- an unreadable body just means one
+    fewer candidate.
+    """
+    from mcp_server.github_client import get_issue
+
+    try:
+        return str((get_issue(repo_name, number) or {}).get("body") or "")[:4000]
+    except Exception:
+        return ""
+
+
 def _parse(text: str) -> dict:
     """Pull the JSON object out of an LLM reply.
 
@@ -234,16 +251,66 @@ def resolver_node(state: GraphState) -> tuple[dict, list[dict]]:
         ),
     })
 
+    # Show the fix, do not just cite it (see agents/triage/fix_snippet.py).
+    #
+    # Placed here on purpose: after the draft has passed all three gates, so a
+    # reply that was never going to be sent does not spend API calls reading a
+    # diff. The reply is only extended when a snippet clears every safeguard --
+    # an irrelevant diff posted publicly costs more trust than no diff at all,
+    # so every rejection is recorded as evidence and the link-only reply stands.
+    reply = drafted["reply"]
+    snippet = None
+    try:
+        from agents.triage.fix_snippet import extract_fix_snippet
+
+        snippet = extract_fix_snippet(
+            state["repo_name"],
+            issue_text=f"{metadata.get('title') or ''}\n\n{metadata.get('body') or ''}",
+            resolution_text=context,
+            old_issue_body=_old_issue_body(state["repo_name"], match["number"]),
+        )
+    except Exception as exc:
+        # Never fail the resolution over its enhancement.
+        evidence.append({
+            "type": "rule", "ref": "fix_snippet_error", "score": None,
+            "snippet": f"could not extract a fix snippet: {exc}",
+        })
+
+    if snippet and snippet.get("markdown"):
+        reply = f"{reply}\n\n{snippet['markdown']}"
+        top = snippet["hunks"][0]
+        evidence.append({
+            "type": "pr", "ref": str(snippet["pr_number"]), "score": snippet["top_relevance"],
+            "snippet": (
+                f"extracted the fix from #{snippet['pr_number']} -- "
+                f"{top['changed']}-line change in {top['file']} "
+                f"(relevance {snippet['top_relevance']:.2f})"
+            ),
+        })
+    elif snippet:
+        evidence.append({
+            "type": "pr", "ref": str(snippet["pr_number"]), "score": snippet["top_relevance"],
+            "snippet": f"#{snippet['pr_number']} cited but not inlined: {snippet['rejected']}",
+        })
+    elif snippet is None:
+        evidence.append({
+            "type": "rule", "ref": "no_fix_pr", "score": None,
+            "snippet": f"#{match['number']} has no linked merged pull request to quote",
+        })
+
     return {
         "resolution": {
             "source_issue": match["number"],
             "source_title": match["title"],
             "similarity": match["score"],
-            "reply": drafted["reply"],
+            "reply": reply,
             "confidence": confidence,
             "reason": drafted.get("reason", ""),
             # decider performs the write; this node never touches GitHub.
             "auto_post": auto,
             "posted": False,
+            # The spec's `code_snippets` payload, for any consumer that wants
+            # the hunks rather than the rendered reply.
+            "code_snippets": snippet if snippet and snippet.get("markdown") else None,
         }
     }, evidence
