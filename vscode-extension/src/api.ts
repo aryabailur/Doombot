@@ -188,6 +188,29 @@ export interface AutoFixResponse {
   commented: boolean
 }
 
+/**
+ * Regression watching -- a merged fix whose own diff applies cleanly again,
+ * meaning a later commit undid it.
+ *
+ * Mirrors `RegressionFinding` in `api/schemas.py`. `status` is the furthest
+ * the watcher got, not a success/failure flag: `blocked` is what `DEMO_MODE`
+ * returns, and `detected` alone (nothing written yet) is as correct an
+ * answer as `fix_opened`.
+ */
+export interface RegressionFinding {
+  source_pr: number
+  source_title: string
+  file: string
+  changed_lines: number
+  detected_at: string
+  head_sha: string
+  issue_number: number | null
+  pr_number: number | null
+  pr_url: string | null
+  status: 'detected' | 'issue_filed' | 'fix_opened' | 'blocked' | 'error'
+  reason: string
+}
+
 
 function config() {
   return vscode.workspace.getConfiguration('doombot')
@@ -382,4 +405,23 @@ export function fixPrNumberFrom(detail: InvestigationDetail): number | null {
   }
   const parsed = Number(prEvidence.ref)
   return Number.isFinite(parsed) ? parsed : null
+}
+
+/**
+ * Regression findings for a repository, newest first. Read-only and always
+ * `200` (an empty array, never a 404), so this is safe to poll.
+ *
+ * Follows `getJson`'s null-on-failure convention like `getEscalations` and
+ * `getInvestigations` above: this is called on the poll timer, not in
+ * response to a user action, so a transient failure must be quietly retried
+ * next tick rather than surfaced. `null` means "could not reach the API";
+ * `[]` is a real answer and must not be conflated with it. Guarded the same
+ * way `getHealth` is -- an unset or malformed `doombot.repository` should
+ * not turn into a request for `/api/repos/undefined/regressions`.
+ */
+export function getRegressions(repo: string): Promise<RegressionFinding[] | null> {
+  if (!repo.includes('/')) {
+    return Promise.resolve(null)
+  }
+  return getJson<RegressionFinding[]>(`/api/repos/${repo}/regressions`)
 }

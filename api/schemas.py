@@ -356,3 +356,41 @@ class AutoFixResponse(BaseModel):
     # "check the test results" rather than implying Doombot verified anything.
     ci: bool = False
     commented: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Regression watching. The inverse of auto-fix: instead of an issue looking for
+# a past fix, a commit is checked against every past fix to see which one it
+# undid. Additive -- no existing model changes.
+# ---------------------------------------------------------------------------
+
+
+class RegressionFinding(BaseModel):
+    """A merged fix whose own patch applies cleanly again, meaning it was undone.
+
+    The discriminator is exact: replaying a merged pull request's diff against
+    the current file either reports "the fix is already applied" -- the healthy
+    case -- or it applies, which can only mean the lines that fix added are no
+    longer there. No model and no heuristic is involved in that judgement.
+
+    `status` is the furthest the watcher got:
+      detected      the regression is real; nothing was written
+      issue_filed   an issue was opened describing it
+      fix_opened    a draft pull request restoring the fix is open
+      blocked       writes are disabled (DEMO_MODE, or the watcher is read-only)
+      error         the attempt failed; see reason
+    """
+
+    source_pr: int
+    source_title: str
+    file: str
+    changed_lines: int
+    # ISO-8601 UTC, and the commit the finding was made against, so a stale
+    # entry is recognisable rather than looking current.
+    detected_at: str
+    head_sha: str
+    issue_number: int | None = None
+    pr_number: int | None = None
+    pr_url: str | None = None
+    status: Literal["detected", "issue_filed", "fix_opened", "blocked", "error"]
+    reason: str

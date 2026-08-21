@@ -34,6 +34,7 @@ from api.schemas import (
     GraphResponse,
     HealthResponse,
     IndexJobResponse,
+    RegressionFinding,
     RepoSummary,
     SearchResponse,
     SourceFileResponse,
@@ -148,6 +149,32 @@ async def get_repo_health(owner: str, repo: str) -> HealthResponse:
         issue_count=current.get("issue_count", 0),
         unreadable=current.get("unreadable", False),
     )
+
+
+@router.get(
+    "/api/repos/{owner}/{repo}/regressions",
+    response_model=list[RegressionFinding],
+)
+def list_regressions(owner: str, repo: str) -> list[RegressionFinding]:
+    """Regressions the monitoring poller has already found, newest first.
+
+    Read-only: this reports what `_scan_repo`'s regression subtask found on
+    its own schedule, it does not run a sweep itself. A GET that quietly
+    re-swept on every call would turn a dashboard or extension refresh into
+    unbounded GitHub writes -- the same trap `get_repo_health` avoids by
+    recomputing a score but never filing anything.
+
+    An empty list, not a 404, for a repository with no findings: the
+    extension polls this endpoint on a timer, and a 404 there would read as
+    this endpoint being broken rather than as the true, uneventful answer.
+    """
+    # Imported here, not at module scope, for the same reason as every other
+    # lazy import in this file: agents pulls in torch and chromadb, and the
+    # API process should start and answer /api/health before those load.
+    from agents.triage.regression import recent
+
+    repo_name = f"{owner}/{repo}"
+    return [RegressionFinding(**finding) for finding in recent(repo_name)]
 
 
 def _escalated_issue_numbers(repo_name: str) -> set[int]:

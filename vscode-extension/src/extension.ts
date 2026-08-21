@@ -4,12 +4,14 @@ import {
   createInvestigation,
   dashboardUrl,
   getHealth,
+  getRegressions,
   openAutoFixPr,
   pollSeconds,
   repository,
   scanRepository,
   searchIssues,
   type AutoFixResponse,
+  type RegressionFinding,
   type SearchResult,
 } from './api'
 import {
@@ -36,6 +38,28 @@ let panel: vscode.WebviewPanel | undefined
  * baseline is not a rise.
  */
 let lastCriticalCount: number | undefined
+
+/**
+ * Regression findings already toasted this session, keyed by
+ * `${source_pr}:${head_sha}` -- the same fix regressing again after a later
+ * commit is a genuinely new event and should toast again, but the same
+ * finding coming back on every poll tick must not repeat.
+ */
+const announcedRegressions = new Set<string>()
+
+/**
+ * Whether the first regressions poll has completed.
+ *
+ * The same trap `lastCriticalCount` documents above, for a differently
+ * shaped piece of state: a regression can have been detected -- or even
+ * already have a draft fix PR -- before this VS Code session ever started
+ * polling, so the very first response the extension sees can describe a
+ * backlog the user has already seen, not a fresh event. So the first
+ * successful poll only records every finding it sees into
+ * `announcedRegressions`; it toasts for none of them. Establishing a
+ * baseline is not an event.
+ */
+let regressionsBaselined = false
 
 export function activate(context: vscode.ExtensionContext): void {
   statusBarItem = vscode.window.createStatusBarItem(
@@ -175,6 +199,140 @@ ${pending} open escalation${pending === 1 ? '' : 's'}`
       })
   }
   lastCriticalCount = critical
+
+  // Regression watching: wrapped in its own try/catch so a problem here --
+  // an unexpected response shape, a status string this extension doesn't
+  // know about -- can never stop the status bar or tree refresh above,
+  // which are this extension's primary job and must keep working even if
+  // this bonus notification breaks.
+  try {
+    if (repo.includes('/')) {
+      await pollRegressions(repo)
+    }
+  } catch {
+    // Swallowed on purpose -- see the comment above.
+  }
+}
+
+/**
+ * Fetches this poll's regression findings and announces anything unseen.
+ *
+ * Follows `getRegressions`'s null-vs-empty-array contract: `null` means the
+ * request itself failed and is quietly retried next tick, while `[]` is a
+ * real, good answer -- nothing regressed -- not a failure to distinguish
+ * from one.
+ */
+async function pollRegressions(repo: string): Promise<void> {
+  const findings = await getRegressions(repo)
+  if (findings === null) {
+    return
+  }
+
+  if (!regressionsBaselined) {
+    // First successful poll: record everything already on the backend as
+    // seen, and toast for none of it -- see `regressionsBaselined` above.
+    for (const finding of findings) {
+      announcedRegressions.add(`${finding.source_pr}:${finding.head_sha}`)
+    }
+    regressionsBaselined = true
+    return
+  }
+
+  const unseen = findings.filter(
+    (finding) =>
+      !announcedRegressions.has(`${finding.source_pr}:${finding.head_sha}`),
+  )
+  if (unseen.length === 0) {
+    return
+  }
+  for (const finding of unseen) {
+    announcedRegressions.add(`${finding.source_pr}:${finding.head_sha}`)
+  }
+
+  // `findings` arrives newest first, so `unseen` does too. A commit that
+  // reverts six fixes must not produce six modal-ish popups: past 3 unseen,
+  // fold everything but the newest into that one toast's "+N more".
+  if (unseen.length > 3) {
+    announceRegression(repo, unseen[0], unseen.length - 1)
+  } else {
+    for (const finding of unseen) {
+      announceRegression(repo, finding, 0)
+    }
+  }
+}
+
+/**
+ * Shows one toast for one regression finding, branching on `status` exactly
+ * as `handleAutoFixResponse` does for `AutoFixResponse` below -- each status
+ * is a distinct, correct outcome the watcher reached on purpose, not a
+ * success/failure pair, so severity and buttons follow from what the
+ * watcher actually did, not a generic "something happened" message. A
+ * button is only offered when the field it needs is non-null -- a button
+ * that opens `undefined` is worse than no button.
+ */
+function announceRegression(
+  repo: string,
+  finding: RegressionFinding,
+  extraCount: number,
+): void {
+  const suffix = extraCount > 0 ? ` (+${extraCount} more)` : ''
+  const issueUrl =
+    finding.issue_number !== null
+      ? `https://github.com/${repo}/issues/${finding.issue_number}`
+      : null
+
+  switch (finding.status) {
+    case 'fix_opened': {
+      const buttons: string[] = []
+      if (finding.pr_url) buttons.push('Open PR')
+      if (issueUrl) buttons.push('Open issue')
+      void vscode.window
+        .showWarningMessage(
+          `Regression in ${finding.file} — the fix from #${finding.source_pr} was undone. Draft PR #${finding.pr_number} restores it.${suffix}`,
+          ...buttons,
+        )
+        .then((choice) => {
+          if (choice === 'Open PR' && finding.pr_url) {
+            void vscode.env.openExternal(vscode.Uri.parse(finding.pr_url))
+          } else if (choice === 'Open issue' && issueUrl) {
+            void vscode.env.openExternal(vscode.Uri.parse(issueUrl))
+          }
+        })
+      break
+    }
+    case 'issue_filed': {
+      // No PR exists yet -- only the issue can be offered.
+      const buttons: string[] = []
+      if (issueUrl) buttons.push('Open issue')
+      void vscode.window
+        .showWarningMessage(
+          `Regression in ${finding.file} — the fix from #${finding.source_pr} was undone.${suffix}`,
+          ...buttons,
+        )
+        .then((choice) => {
+          if (choice === 'Open issue' && issueUrl) {
+            void vscode.env.openExternal(vscode.Uri.parse(issueUrl))
+          }
+        })
+      break
+    }
+    case 'detected':
+      // Nothing was written yet -- no buttons, just the file and the
+      // watcher's reason, verbatim.
+      void vscode.window.showInformationMessage(
+        `Regression detected in ${finding.file}: ${finding.reason}${suffix}`,
+      )
+      break
+    case 'blocked':
+      // What DEMO_MODE=1 returns, or writes being off entirely. Not a
+      // failure -- reporting it as one would send someone debugging a
+      // setting that is working exactly as designed.
+      void vscode.window.showInformationMessage(`${finding.reason}${suffix}`)
+      break
+    case 'error':
+      void vscode.window.showErrorMessage(`${finding.reason}${suffix}`)
+      break
+  }
 }
 
 /**
