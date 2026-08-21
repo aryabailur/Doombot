@@ -104,14 +104,15 @@ export function OnboardingPipeline({
   onDismiss,
   className,
 }: OnboardingPipelineProps) {
-  const [reducedMotion, setReducedMotion] = useState(false)
+  const [reducedMotion, setReducedMotion] = useState(
+    () => typeof window !== 'undefined' && Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches),
+  )
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.matchMedia) {
       return
     }
     const media = window.matchMedia('(prefers-reduced-motion: reduce)')
-    setReducedMotion(media.matches)
     const onChange = () => setReducedMotion(media.matches)
     media.addEventListener('change', onChange)
     return () => media.removeEventListener('change', onChange)

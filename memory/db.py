@@ -66,8 +66,55 @@ CREATE TABLE IF NOT EXISTS feedback (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS proposed_actions (
+    id TEXT PRIMARY KEY,
+    investigation_id TEXT NOT NULL UNIQUE REFERENCES investigations(id),
+    repo_name TEXT NOT NULL,
+    issue_number INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    comment TEXT,
+    labels_json TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL CHECK (
+        status IN ('proposed', 'approved', 'rejected', 'executing', 'verified', 'failed')
+    ),
+    decided_by TEXT,
+    decision_note TEXT,
+    result_json TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    decided_at TEXT,
+    executed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS fix_runs (
+    id TEXT PRIMARY KEY,
+    investigation_id TEXT NOT NULL REFERENCES investigations(id),
+    repo_name TEXT NOT NULL,
+    issue_number INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK (
+        status IN (
+            'queued', 'preparing', 'generating', 'verifying', 'proposed',
+            'failed', 'approved', 'rejected', 'publishing', 'published'
+        )
+    ),
+    base_sha TEXT,
+    summary TEXT,
+    patch_diff TEXT,
+    commands_json TEXT NOT NULL DEFAULT '[]',
+    receipts_json TEXT NOT NULL DEFAULT '[]',
+    error TEXT,
+    decided_by TEXT,
+    decision_note TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    decided_at TEXT,
+    published_at TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_steps_inv ON chain_steps(investigation_id, seq);
 CREATE INDEX IF NOT EXISTS idx_inv_repo ON investigations(repo_name, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_actions_status ON proposed_actions(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_fix_runs_repo ON fix_runs(repo_name, created_at DESC);
 """
 
 

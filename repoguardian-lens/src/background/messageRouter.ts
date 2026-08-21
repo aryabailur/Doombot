@@ -17,7 +17,18 @@ import { LiveAgentEngine } from './agent/LiveAgentEngine'
  *
  * A rejected entry is evicted so a transient failure does not become sticky.
  */
-const cache = new Map<string, Promise<unknown>>()
+type CacheEntry = {
+  expiresAt: number
+  value: Promise<unknown>
+}
+
+const cache = new Map<string, CacheEntry>()
+const CACHE_TTL = {
+  context: 5 * 60_000,
+  activity: 15_000,
+  health: 60_000,
+  memory: 5 * 60_000,
+}
 
 /**
  * Live agent feed, shared for the worker's lifetime.
@@ -40,14 +51,15 @@ async function syncMonitor(): Promise<void> {
   }
 }
 
-function cached<T>(key: string, factory: () => Promise<T>): Promise<T> {
+function cached<T>(key: string, factory: () => Promise<T>, ttlMs: number): Promise<T> {
   const existing = cache.get(key)
-  if (existing) return existing as Promise<T>
+  if (existing && existing.expiresAt > Date.now()) return existing.value as Promise<T>
+  if (existing) cache.delete(key)
   const pending = factory().catch((error: unknown) => {
     cache.delete(key)
     throw error
   })
-  cache.set(key, pending)
+  cache.set(key, { expiresAt: Date.now() + ttlMs, value: pending })
   return pending as Promise<T>
 }
 
@@ -73,31 +85,21 @@ async function resolveEngine(fallback: AgentEngine): Promise<{ engine: AgentEngi
 }
 
 /**
- * Run a live request, degrading to the seeded engine when GitHub is
- * unavailable.
+ * Run one engine request without crossing data-source boundaries.
  *
- * The demo must never hard-fail (spec section 39), but a silent swap would be
- * dishonest -- the caller is told the result came from demo data so the UI can
- * say so.
+ * Demo mode is seeded by definition. Live mode must never return those
+ * fixtures: an unavailable backend or GitHub API is an honest error, not an
+ * excuse to display convincing sample data under a LIVE badge.
  */
-async function withFallback<T>(
-  live: boolean,
-  attempt: () => Promise<T>,
-  fallback: () => Promise<T>,
-): Promise<ExtensionResponse<T>> {
+async function execute<T>(attempt: () => Promise<T>): Promise<ExtensionResponse<T>> {
   try {
     return { ok: true, data: await attempt() }
   } catch (error) {
-    if (!live) throw error
     const reason =
       error instanceof GitHubError
         ? error.message
-        : 'Live GitHub analysis failed.'
-    try {
-      return { ok: true, data: await fallback(), degraded: true, notice: reason }
-    } catch {
-      return { ok: false, error: reason, recoverable: true }
-    }
+        : 'RepoGuardian could not retrieve current data.'
+    return { ok: false, error: reason, recoverable: true }
   }
 }
 
@@ -114,71 +116,101 @@ export async function routeMessage(
 
     switch (message.type) {
       case 'GET_REPOSITORY_CONTEXT':
-        return await withFallback(
-          live,
-          () => cached(`${scope}:context:${repository}`, () => active.getRepositoryContext(message)),
-          () => engine.getRepositoryContext(message),
+        return await execute(() =>
+          cached(
+            `${scope}:context:${repository}`,
+            () => active.getRepositoryContext(message),
+            CACHE_TTL.context,
+          ),
         )
       case 'GET_ISSUE_INSIGHT':
-        return await withFallback(
-          live,
-          () => active.getIssueInsight(message),
-          () => engine.getIssueInsight(message),
-        )
+        return await execute(() => active.getIssueInsight(message))
       case 'RUN_INVESTIGATION':
-        return await withFallback(
-          live,
-          () => active.investigateIssue(message),
-          () => engine.investigateIssue(message),
-        )
+        return await execute(() => active.investigateIssue(message))
       case 'GET_ACTIVITY':
-        return await withFallback(
-          live,
-          () => cached(`${scope}:activity:${repository}`, () => active.getActivity(message)),
-          () => engine.getActivity(message),
+        return await execute(() =>
+          cached(
+            `${scope}:activity:${repository}`,
+            () => active.getActivity(message),
+            CACHE_TTL.activity,
+          ),
         )
       case 'GET_REPOSITORY_MEMORY':
-        return await withFallback(
-          live,
-          () => cached(`${scope}:memory:${repository}`, () => active.getRepositoryMemory(message)),
-          () => engine.getRepositoryMemory(message),
+        return await execute(() =>
+          cached(
+            `${scope}:memory:${repository}`,
+            () => active.getRepositoryMemory(message),
+            CACHE_TTL.memory,
+          ),
         )
       case 'ASK_AGENT':
-        return await withFallback(
-          live,
-          () => active.answerQuestion(message),
-          () => engine.answerQuestion(message),
-        )
+        return await execute(() => active.answerQuestion(message))
       case 'GET_DUPLICATES':
-        return await withFallback(
-          live,
-          () => active.findDuplicates(message),
-          () => engine.findDuplicates(message),
-        )
+        return await execute(() => active.findDuplicates(message))
       case 'GET_PR_REVIEW':
-        return await withFallback(
-          live,
-          () => active.reviewPullRequest(message),
-          () => engine.reviewPullRequest(message),
-        )
+        return await execute(() => active.reviewPullRequest(message))
       case 'GET_HEALTH':
-        return await withFallback(
-          live,
-          () => cached(`${scope}:health:${repository}`, () => active.getRepositoryHealth(message)),
-          () => engine.getRepositoryHealth(message),
+        return await execute(() =>
+          cached(
+            `${scope}:health:${repository}`,
+            () => active.getRepositoryHealth(message),
+            CACHE_TTL.health,
+          ),
         )
       case 'APPROVE_ACTION':
-        return { ok: true, data: await saveApproval(message.action, message.approved) }
+        if (live) {
+          if (!active.decideAction) {
+            return {
+              ok: false,
+              error: 'A configured RepoGuardian backend is required to execute approved GitHub actions.',
+              recoverable: true,
+            }
+          }
+          return await execute(() => active.decideAction!(message.action, message.approved))
+        }
+        await saveApproval(message.action, message.approved)
+        return {
+          ok: true,
+          data: {
+            ...message.action,
+            status: message.approved ? 'approved' : 'rejected',
+            live: false,
+          },
+        }
+      case 'START_FIX_RUN':
+        if (!live || !active.startFixRun) {
+          return {
+            ok: false,
+            error: 'A configured RepoGuardian backend is required to generate and verify a candidate fix.',
+            recoverable: true,
+          }
+        }
+        return await execute(() => active.startFixRun!(message.investigationId))
+      case 'DECIDE_FIX_RUN':
+        if (!live || !active.decideFixRun) {
+          return {
+            ok: false,
+            error: 'A configured RepoGuardian backend is required to review a candidate fix.',
+            recoverable: true,
+          }
+        }
+        return await execute(() => active.decideFixRun!(message.runId, message.approved))
       case 'RECORD_FEEDBACK':
         return { ok: true, data: await saveFeedback(message.feedback) }
-      case 'GET_AGENT_ACTIVITY':
+      case 'GET_AGENT_ACTIVITY': {
         // Reconnect opportunistically: the worker may have been terminated
         // and restarted since the last message.
         await syncMonitor()
+        const repository =
+          message.owner && message.repo ? `${message.owner}/${message.repo}` : undefined
         return {
           ok: true,
-          data: { connected: monitor.connected(), events: monitor.snapshot() },
+          data: {
+            connected: monitor.connected(),
+            events: monitor.snapshot(repository),
+          },
         }
+      }
       case 'GET_SETTINGS':
         return { ok: true, data: await readSettings() }
       case 'SET_SETTINGS':

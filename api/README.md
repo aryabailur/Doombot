@@ -62,13 +62,18 @@ computed from real GitHub data.
 |---|---|
 | `GET /api/health` | Live — liveness probe, returns `{"status":"ok"}` |
 | `GET /api/repos` | Live |
-| `POST /api/repos/{owner}/{repo}/index` | Live |
+| `POST /api/repos/{owner}/{repo}/index` | Live — bounded source + issue indexing with reusable job status |
+| `GET /api/index-jobs/{id}` | Live — indexing progress for the extension |
 | `GET /api/repos/{owner}/{repo}/health` | Live — real scoring, 4-axis breakdown |
 | `POST /api/investigations` | Live — returns an id, runs the graph in the background |
 | `GET /api/investigations` | Live |
 | `GET /api/investigations/{id}` | Live — replays the chain from SQLite |
 | `GET /api/escalations` | Live — joined to investigations for number/title |
-| `POST /api/feedback` | Live — logged and displayed, does not alter agent behavior (a deliberate cut) |
+| `GET /api/actions`, `POST /api/actions/{id}/decision` | Live — persisted approval and exactly-once execution lifecycle |
+| `GET /api/policy?repo_name=owner/repo` | Live — auditable preferences learned from maintainer decisions |
+| `POST /api/fix-runs`, `GET /api/fix-runs/{id}` | Live — grounded patch generation plus locked-down container verification |
+| `POST /api/fix-runs/{id}/decision` | Live — single-use maintainer review; approval does not publish code |
+| `POST /api/feedback` | Live — generic usefulness feedback is logged; action decisions shape repository policy |
 | `GET /api/repos/{owner}/{repo}/graph` | Live |
 | `GET /api/repos/{owner}/{repo}/code-graph` | Live — `lru_cache`d, invalidated on index |
 | `GET /api/brief/{owner}/{repo}` | Live — counts only, deliberately not an LLM call |
@@ -99,6 +104,18 @@ about to break rule 7.
 ```bash
 uvicorn api.main:app --reload --port 8000
 ```
+
+Build the trusted Python verifier once before using Fix Lab:
+
+```bash
+docker build -f fixlab/Dockerfile.python -t repoguardian-fixlab-python:local .
+```
+
+The build may use the network to install project dependencies. Candidate
+verification never pulls an image and runs with no network, a read-only root
+filesystem and repository mount, no Linux capabilities, and bounded CPU,
+memory, process count, and runtime. A missing image is a hard failure rather
+than a fallback to host execution.
 
 ## Verify
 

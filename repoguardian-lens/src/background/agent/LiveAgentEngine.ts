@@ -325,7 +325,9 @@ export class LiveAgentEngine implements AgentEngine {
   }
 
   async getActivity(input: RepositoryInput): Promise<ActivitySummary> {
-    const corpus = await this.corpus(input)
+    // Attention is an active-work queue, so closed issues must never appear.
+    // Historical retrieval still uses the all-state corpus elsewhere.
+    const corpus = await this.client.listIssues(input.owner, input.repo, 100, 'open')
 
     // Rank every sampled issue, then surface only those whose decision
     // actually warrants attention. Everything else counts as handled.
@@ -351,6 +353,7 @@ export class LiveAgentEngine implements AgentEngine {
       .slice(0, 3)
 
     return {
+      source: 'github',
       automatedCount: Math.max(0, scored.length - attention.length),
       attentionCount: attention.length,
       items: attention.map((entry) => ({
@@ -365,6 +368,22 @@ export class LiveAgentEngine implements AgentEngine {
   async answerQuestion(input: QuestionInput): Promise<GroundedAnswer> {
     const corpus = await this.corpus(input)
     const question = input.question.toLowerCase()
+    const repository = this.repoName(input)
+
+    const issueEvidence = (
+      issue: IssueRecord,
+      score: number,
+      reason: string,
+    ): EvidenceSource => ({
+      id: `#${issue.number}`,
+      type: 'issue',
+      title: issue.title,
+      url: `https://github.com/${repository}/issues/${issue.number}`,
+      score,
+      reason,
+      subsystem: issue.subsystem,
+      labels: issue.labels,
+    })
 
     // "What should I care about?" is the product's central promise (spec
     // section 19), so it is answered from the same decision pipeline the
@@ -373,7 +392,7 @@ export class LiveAgentEngine implements AgentEngine {
       const activity = await this.getActivity(input)
       if (activity.items.length === 0) {
         return {
-          answer: `Nothing in the ${activity.automatedCount} most recent issues of ${this.repoName(input)} meets the escalation threshold.`,
+          answer: `Nothing in the ${activity.automatedCount} most recent issues of ${repository} meets the escalation threshold.`,
           confidence: 0.5,
           evidence: [],
           suggestedAction: 'Review the repository health snapshot for slower-moving trends.',
@@ -389,9 +408,94 @@ export class LiveAgentEngine implements AgentEngine {
       }))
       return {
         answer: `${activity.items.length} issue(s) need attention, starting with #${activity.items[0].issueNumber}: ${activity.items[0].title}.`,
-        confidence: activity.items[0].confidence,
+        confidence: activity.items[0].confidence ?? 0,
         evidence,
         suggestedAction: `Open #${activity.items[0].issueNumber} and review its investigation.`,
+      }
+    }
+
+    // Questions phrased around "this issue" must use the issue visible on the
+    // GitHub page. Repository-wide lexical search cannot reliably infer that
+    // context from words such as "security concern" or "similar bugs".
+    const currentIssueNumber =
+      input.context?.type === 'issue' ? input.context.issueNumber : undefined
+    const asksAboutCurrentIssue = /\b(this issue|similar|duplicate|related|important|why|security|vulnerab|credential|secret|api[ _-]?key|password|evidence)\b/.test(question)
+
+    if (currentIssueNumber && asksAboutCurrentIssue) {
+      const issue =
+        corpus.find((candidate) => candidate.number === currentIssueNumber) ??
+        await this.client.getIssue(input.owner, input.repo, currentIssueNumber)
+      const matches = searchLiveIssues({
+        target: issue,
+        corpus,
+        repository,
+        limit: 4,
+      })
+      const { insight } = decideLiveIssue({ issue, matches, repository })
+      const currentEvidence = issueEvidence(
+        issue,
+        insight.confidence,
+        'current GitHub issue and its repository classification signals',
+      )
+
+      if (/\b(similar|duplicate|related)\b/.test(question)) {
+        if (matches.length === 0) {
+          return {
+            answer: `No related report passed the evidence threshold for #${issue.number}.`,
+            confidence: 0.5,
+            evidence: [currentEvidence],
+            suggestedAction: 'Add reproduction details or distinctive error text, then run the investigation again.',
+          }
+        }
+        return {
+          answer: `${matches.length} related report(s) found for #${issue.number}. The strongest is ${matches[0].id}: ${matches[0].title} (${matches[0].whyMatched}).`,
+          confidence: Number(Math.min(0.8, matches[0].score ?? 0.3).toFixed(2)),
+          evidence: matches.map(toEvidence),
+          suggestedAction: `Compare #${issue.number} with ${matches[0].id} before deciding whether it is a duplicate or regression.`,
+        }
+      }
+
+      const evidence = [currentEvidence, ...insight.evidence].filter(
+        (source, index, items) => items.findIndex((item) => item.id === source.id) === index,
+      )
+      return {
+        answer: insight.summary,
+        confidence: insight.confidence,
+        evidence,
+        suggestedAction: insight.suggestedAction,
+      }
+    }
+
+    // These are repository-wide questions exposed as one-click prompts. They
+    // use GitHub-derived subsystem classification instead of hoping a generic
+    // sentence has enough cosine overlap with a short issue title.
+    if (/\b(auth|authentication|login|oauth)\b/.test(question)) {
+      const authentication = corpus
+        .filter((issue) => issue.subsystem === 'authentication')
+        .slice(0, 4)
+      if (authentication.length > 0) {
+        return {
+          answer: `${authentication.length} authentication-related report(s) found, starting with #${authentication[0].number}: ${authentication[0].title}.`,
+          confidence: 0.78,
+          evidence: authentication.map((issue) =>
+            issueEvidence(issue, 0.78, 'classified in the authentication subsystem'),
+          ),
+          suggestedAction: `Open #${authentication[0].number} and review its investigation.`,
+        }
+      }
+    }
+
+    if (/\b(changed|recent|recently|latest|new)\b/.test(question)) {
+      const recent = corpus.slice(0, 4)
+      if (recent.length > 0) {
+        return {
+          answer: `GitHub's most recently updated reports start with #${recent[0].number}: ${recent[0].title}.`,
+          confidence: 0.7,
+          evidence: recent.map((issue) =>
+            issueEvidence(issue, 0.7, 'among the repository issues most recently updated on GitHub'),
+          ),
+          suggestedAction: `Open #${recent[0].number} to review the latest repository activity.`,
+        }
       }
     }
 
@@ -407,13 +511,13 @@ export class LiveAgentEngine implements AgentEngine {
     const matches = searchLiveIssues({
       target: pseudo,
       corpus,
-      repository: this.repoName(input),
+      repository,
       limit: 4,
     })
 
     if (matches.length === 0) {
       return {
-        answer: `Insufficient evidence: no issue in ${this.repoName(input)} matches that question closely enough to answer it.`,
+        answer: `Insufficient evidence: no issue in ${repository} matches that question closely enough to answer it.`,
         confidence: 0.25,
         evidence: [],
         suggestedAction: 'Rephrase using terms that would appear in an issue title, or ask about repository health.',

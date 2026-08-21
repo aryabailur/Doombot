@@ -6,6 +6,7 @@ import { AgentMonitor } from './AgentMonitor'
 class FakeSocket {
   static last?: FakeSocket
   readyState = 0
+  sent: unknown[] = []
   listeners: Record<string, Array<(event: unknown) => void>> = {}
   constructor(readonly url: string) { FakeSocket.last = this }
   addEventListener(type: string, fn: (event: unknown) => void) {
@@ -16,14 +17,17 @@ class FakeSocket {
     for (const fn of this.listeners[type] ?? []) fn(event)
   }
   open() { this.readyState = 1; this.emit('open', {}) }
-  send(data: unknown) { this.emit('message', { data: JSON.stringify(data) }) }
+  send(data: unknown) { this.sent.push(data); this.emit('message', { data: JSON.stringify(data) }) }
 }
 
 beforeEach(() => {
   vi.stubGlobal('WebSocket', FakeSocket as unknown as typeof WebSocket)
   Object.assign(globalThis.WebSocket, { OPEN: 1, CONNECTING: 0 })
 })
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+  vi.useRealTimers()
+  vi.unstubAllGlobals()
+})
 
 const step = {
   step_id: 'st1',
@@ -48,6 +52,19 @@ describe('AgentMonitor', () => {
     expect(FakeSocket.last?.url).toBe('wss://agent.example.com/ws')
   })
 
+  it('sends a heartbeat while connected so Chrome can keep the worker active', () => {
+    vi.useFakeTimers()
+    const monitor = new AgentMonitor()
+    monitor.connect('http://localhost:8000')
+    const socket = FakeSocket.last!
+    socket.open()
+
+    vi.advanceTimersByTime(20_000)
+
+    expect(socket.sent).toContain('ping')
+    monitor.disconnect()
+  })
+
   it('flattens all four backend envelope types into one feed', () => {
     const monitor = new AgentMonitor()
     monitor.connect('http://localhost:8000')
@@ -68,7 +85,9 @@ describe('AgentMonitor', () => {
     const started = feed.find((e) => e.running)
     expect(started?.state).toBe('checking_precedent')
     expect(feed.find((e) => e.durationMs === 996)).toBeDefined()
-    expect(feed.find((e) => e.repository === 'a/b')?.message).toContain('Detected #7')
+    expect(
+      feed.find((e) => e.kind === 'activity' && e.repository === 'a/b')?.message,
+    ).toContain('Detected #7')
   })
 
   it('accepts the data key the backend actually emits', () => {
@@ -83,6 +102,55 @@ describe('AgentMonitor', () => {
     expect(event.kind).toBe('step')
     expect(event.state).toBe('checking_precedent')
     expect(event.durationMs).toBe(996)
+  })
+
+  it('associates autonomous steps with their repository and filters the feed', () => {
+    const monitor = new AgentMonitor()
+    monitor.connect('http://localhost:8000')
+    FakeSocket.last!.open()
+    FakeSocket.last!.send({
+      type: 'activity',
+      data: {
+        ts: '2026-08-20T15:00:00Z',
+        repo_name: 'a/b',
+        message: 'Detected #7 — starting investigation',
+        severity: 'info',
+      },
+    })
+    FakeSocket.last!.send({ type: 'step.completed', data: step })
+    FakeSocket.last!.send({
+      type: 'investigation.completed',
+      data: { investigation_id: 'inv1', decision: 'escalate' },
+    })
+
+    const matching = monitor.snapshot('a/b')
+    expect(matching.some((event) => event.kind === 'step')).toBe(true)
+    expect(matching.some((event) => event.kind === 'decision')).toBe(true)
+    expect(matching.every((event) => !event.repository || event.repository === 'a/b')).toBe(true)
+    expect(monitor.snapshot('x/y').map((event) => event.kind)).toEqual(['connection'])
+  })
+
+  it('restores persisted events and notifies subscribers only for new activity', () => {
+    const restored = {
+      id: 'old',
+      kind: 'activity' as const,
+      message: 'Previously observed',
+      timestamp: '2026-08-20T14:00:00Z',
+      severity: 'info' as const,
+      repository: 'a/b',
+    }
+    const monitor = new AgentMonitor()
+    const received: string[] = []
+    monitor.subscribe((event) => received.push(event.id))
+    monitor.restore([restored])
+
+    expect(monitor.snapshot()).toEqual([restored])
+    expect(received).toEqual([])
+
+    monitor.connect('http://localhost:8000')
+    FakeSocket.last!.open()
+    expect(received).toHaveLength(1)
+    expect(received[0]).toContain('connected-')
   })
 
   it('marks an errored step as an error rather than progress', () => {

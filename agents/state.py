@@ -28,6 +28,7 @@ class GraphState(TypedDict, total=False):
     investigation_id: str          # UUID assigned by the API layer before invoking issue_app
     issue_number: int              # issue being triaged
     issue_metadata: dict           # title/body/labels/reactions/comments/author/created_at
+    code_diagnosis: dict           # ranked code candidates or insufficient-evidence status
     duplicates: list[dict]         # [{"number": int, "score": float, "relation": "duplicate"|"related"}]
     security_findings: list[dict]  # [{"keyword": str, "context": str}]
     impact_score: int              # 0-100, from impact_scorer
@@ -35,5 +36,6 @@ class GraphState(TypedDict, total=False):
     labels_confidence: float       # labeler's certainty, 0.0-1.0
     labels_suggested: bool         # True => below threshold, decider must not auto-apply
     resolution: dict | None        # F16: {source_issue, reply, confidence, auto_post, posted}
+    repository_policy: dict        # decision-derived preferences for this repository
     decision: dict                 # {"action": ..., "reason": ..., "confidence": float}
     chain: Annotated[list[dict], add]  # StepRecord log; every node appends exactly one

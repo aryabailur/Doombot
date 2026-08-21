@@ -81,6 +81,25 @@ INVESTIGATION_DETAIL = {
     "decision_reason": (str, type(None)),
     "confidence": (float, int, type(None)),
     "impact_score": (float, int, type(None)),
+    "proposed_action": (dict, type(None)),
+}
+
+PROPOSED_ACTION = {
+    "id": (str,),
+    "investigation_id": (str,),
+    "repo_name": (str,),
+    "issue_number": (int,),
+    "action": (str,),
+    "comment": (str, type(None)),
+    "labels": (list,),
+    "status": (str,),
+    "decided_by": (str, type(None)),
+    "decision_note": (str, type(None)),
+    "result": (dict, type(None)),
+    "error": (str, type(None)),
+    "created_at": (str,),
+    "decided_at": (str, type(None)),
+    "executed_at": (str, type(None)),
 }
 
 ESCALATION = {
@@ -118,6 +137,40 @@ REPO_SUMMARY = {
     "health_score": (float, int),
     "open_investigations": (int,),
     "last_scan": (str, type(None)),
+}
+
+REPOSITORY_POLICY = {
+    "repo_name": (str,),
+    "mode": (str,),
+    "minimum_samples": (int,),
+    "total_decisions": (int,),
+    "approvals": (int,),
+    "rejections": (int,),
+    "approval_rate": (float, int, type(None)),
+    "actions": (list,),
+    "labels": (list,),
+    "learned_rules": (list,),
+    "updated_at": (str, type(None)),
+}
+
+FIX_RUN = {
+    "id": (str,),
+    "investigation_id": (str,),
+    "repo_name": (str,),
+    "issue_number": (int,),
+    "status": (str,),
+    "base_sha": (str, type(None)),
+    "summary": (str, type(None)),
+    "patch_diff": (str, type(None)),
+    "commands": (list,),
+    "receipts": (list,),
+    "error": (str, type(None)),
+    "decided_by": (str, type(None)),
+    "decision_note": (str, type(None)),
+    "created_at": (str,),
+    "updated_at": (str,),
+    "decided_at": (str, type(None)),
+    "published_at": (str, type(None)),
 }
 
 STEP_STATUSES = {"running", "done", "error"}
@@ -243,6 +296,33 @@ def test_investigation_detail_and_steps():
     # replay would silently show the investigation out of sequence.
     seqs = [step["seq"] for step in detail["steps"]]
     assert seqs == sorted(seqs), f"steps not ordered by seq: {seqs}"
+    if detail["proposed_action"] is not None:
+        assert_shape(detail["proposed_action"], PROPOSED_ACTION, "ProposedAction")
+
+
+def test_proposed_actions_shape():
+    _require_api()
+    status, body = _get("/api/actions")
+    assert status == 200
+    assert isinstance(body, list), "/api/actions must return a list"
+    for index, item in enumerate(body):
+        assert_shape(item, PROPOSED_ACTION, f"ProposedAction[{index}]")
+
+
+def test_repository_policy_shape():
+    _require_api()
+    status, body = _get("/api/policy?repo_name=octocat%2FHello-World")
+    assert status == 200
+    assert_shape(body, REPOSITORY_POLICY, "RepositoryPolicy")
+
+
+def test_fix_runs_shape():
+    _require_api()
+    status, body = _get("/api/fix-runs")
+    assert status == 200
+    assert isinstance(body, list)
+    for index, item in enumerate(body):
+        assert_shape(item, FIX_RUN, f"FixRun[{index}]")
 
 
 def test_escalations_shape():

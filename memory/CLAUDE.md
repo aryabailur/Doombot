@@ -103,8 +103,49 @@ CREATE TABLE IF NOT EXISTS feedback (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS proposed_actions (
+    id TEXT PRIMARY KEY,
+    investigation_id TEXT NOT NULL UNIQUE REFERENCES investigations(id),
+    repo_name TEXT NOT NULL,
+    issue_number INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    comment TEXT,
+    labels_json TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL CHECK (
+        status IN ('proposed', 'approved', 'rejected', 'executing', 'verified', 'failed')
+    ),
+    decided_by TEXT,
+    decision_note TEXT,
+    result_json TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    decided_at TEXT,
+    executed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS fix_runs (
+    id TEXT PRIMARY KEY,
+    investigation_id TEXT NOT NULL REFERENCES investigations(id),
+    repo_name TEXT NOT NULL,
+    issue_number INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    base_sha TEXT,
+    summary TEXT,
+    patch_diff TEXT,
+    commands_json TEXT NOT NULL DEFAULT '[]',
+    receipts_json TEXT NOT NULL DEFAULT '[]',
+    error TEXT,
+    decided_by TEXT,
+    decision_note TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    decided_at TEXT,
+    published_at TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_steps_inv ON chain_steps(investigation_id, seq);
 CREATE INDEX IF NOT EXISTS idx_inv_repo ON investigations(repo_name, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_actions_status ON proposed_actions(status, created_at DESC);
 ```
 
 No migration framework. If the schema needs to change, edit the DDL above,
@@ -226,6 +267,30 @@ def record_feedback(
     note: str | None = None,
 ) -> None:
     """Insert one row into feedback with created_at=now."""
+
+def create_proposed_action(...) -> dict:
+    """Persist the exact comment/labels payload with status='proposed'."""
+
+def get_proposed_action(action_id: str) -> dict | None:
+    """Return one decoded action or None."""
+
+def get_investigation_action(investigation_id: str) -> dict | None:
+    """Return the single action associated with an investigation."""
+
+def list_proposed_actions(status: str | None = None, repo_name: str | None = None) -> list[dict]:
+    """Return newest-first actions, optionally filtered by status/repository."""
+
+def decide_proposed_action(...) -> dict | None:
+    """Atomically transition proposed -> approved/rejected."""
+
+def mark_action_executing(action_id: str) -> bool:
+    """Atomically claim an approved action exactly once."""
+
+def complete_action(...) -> dict | None:
+    """Persist verified/failed status and the execution receipt."""
+
+def get_repository_policy(repo_name: str) -> dict:
+    """Derive conservative action/label guidance from decided proposals."""
 ```
 
 ---
@@ -256,7 +321,7 @@ c = get_conn(); \
 print([r[0] for r in c.execute(\"select name from sqlite_master where type='table'\")])"
 ```
 
-Expect: `['investigations', 'chain_steps', 'escalations', 'health_scores', 'feedback']`
+Expect: `['investigations', 'chain_steps', 'escalations', 'health_scores', 'feedback', 'proposed_actions', 'fix_runs']`
 (order may vary; `sqlite_sequence` may also appear if any autoincrement
 table has been written to).
 

@@ -1,4 +1,4 @@
-import { Check, LockKeyhole, ShieldCheck, X } from 'lucide-react'
+import { AlertTriangle, Check, LoaderCircle, LockKeyhole, ShieldCheck, X } from 'lucide-react'
 
 import type { ApprovalAction } from '@/lib/types'
 import { EvidenceChip } from './EvidenceChip'
@@ -11,10 +11,21 @@ export function ApprovalTray({
   onDecision: (action: ApprovalAction, approved: boolean) => void
 }) {
   if (action.status !== 'proposed') {
+    const pending = action.status === 'approved' || action.status === 'executing'
+    const succeeded = action.status === 'verified' || (!action.live && action.status === 'approved')
+    const message = action.error
+      ? action.error
+      : action.status === 'verified'
+        ? 'The backend executed the approved payload and recorded its receipt.'
+        : action.status === 'rejected'
+          ? 'The proposal was rejected and no GitHub write occurred.'
+          : !action.live && action.status === 'approved'
+            ? 'Demo decision stored locally. No GitHub write occurred.'
+            : 'The approved action is being executed by the backend.'
     return (
       <section className={`rg-approval-result rg-approval-result--${action.status}`}>
-        {action.status === 'approved' ? <Check aria-hidden="true" size={15} /> : <X aria-hidden="true" size={15} />}
-        <div><strong>Action {action.status}</strong><span>Demo state updated locally. No GitHub write occurred.</span></div>
+        {succeeded ? <Check aria-hidden="true" size={15} /> : pending ? <LoaderCircle aria-hidden="true" size={15} /> : action.status === 'failed' ? <AlertTriangle aria-hidden="true" size={15} /> : <X aria-hidden="true" size={15} />}
+        <div><strong>Action {action.status}</strong><span>{message}</span></div>
       </section>
     )
   }
@@ -32,7 +43,7 @@ export function ApprovalTray({
         <button className="rg-button rg-button--primary" type="button" onClick={() => onDecision(action, true)}>Approve</button>
         <button className="rg-button" type="button" onClick={() => onDecision(action, false)}>Reject</button>
       </div>
-      <small>No live GitHub mutation occurs in demo mode.</small>
+      <small>{action.live ? 'Approval sends exactly this payload to the configured backend.' : 'No live GitHub mutation occurs in demo mode.'}</small>
     </section>
   )
 }

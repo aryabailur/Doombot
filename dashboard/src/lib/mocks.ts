@@ -152,6 +152,7 @@ export function mockInvestigationDetail(id: string): InvestigationDetail {
       "Buffer in parse_chunk grows unbounded on large payloads; related to #31 but distinct enough to track separately. Recommend triage as bug, high priority.",
     confidence: 0.78,
     impact_score: 0.63,
+    proposed_action: null,
   };
 }
 

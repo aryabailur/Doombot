@@ -13,12 +13,29 @@ import { readSettings, saveSettings } from '@/lib/storage'
 import '@/styles/lens.css'
 import './options.css'
 
+function backendOriginPattern(value?: string): string | undefined {
+  if (!value) return undefined
+  try {
+    const url = new URL(value)
+    return ['http:', 'https:'].includes(url.protocol)
+      ? `${url.protocol}//${url.host}/*`
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
 export function Options() {
   const [settings, setSettings] = useState<LensSettings | null>(null)
   const [saved, setSaved] = useState(false)
+  const [backendDraft, setBackendDraft] = useState('')
+  const [backendError, setBackendError] = useState<string | null>(null)
 
   useEffect(() => {
-    void readSettings().then(setSettings)
+    void readSettings().then((stored) => {
+      setSettings(stored)
+      setBackendDraft(stored.backendUrl ?? '')
+    })
   }, [])
 
   if (!settings) {
@@ -35,6 +52,40 @@ export function Options() {
       await chrome.runtime.sendMessage({ type: 'SET_SETTINGS', settings: patch })
     } catch {
       // Worker asleep; it reads storage on next wake.
+    }
+  }
+
+  const saveBackend = async () => {
+    const value = backendDraft.trim()
+    const previousOrigin = backendOriginPattern(settings.backendUrl)
+    setBackendError(null)
+    if (!value) {
+      await update({ backendUrl: undefined })
+      if (previousOrigin) {
+        await chrome.permissions.remove({ origins: [previousOrigin] })
+      }
+      return
+    }
+
+    let url: URL
+    try {
+      url = new URL(value)
+      if (!['http:', 'https:'].includes(url.protocol)) throw new Error()
+    } catch {
+      setBackendError('Enter a valid http:// or https:// backend origin.')
+      return
+    }
+
+    const originPattern = `${url.protocol}//${url.host}/*`
+    const granted = await chrome.permissions.request({ origins: [originPattern] })
+    if (!granted) {
+      setBackendError('Backend access was not granted. No setting was changed.')
+      return
+    }
+    await update({ backendUrl: url.origin })
+    setBackendDraft(url.origin)
+    if (previousOrigin && previousOrigin !== originPattern) {
+      await chrome.permissions.remove({ origins: [previousOrigin] })
     }
   }
 
@@ -110,10 +161,16 @@ export function Options() {
           type="url"
           className="rg-opt-input"
           placeholder="Not set — paste an origin to enable the agent feed"
-          defaultValue={settings.backendUrl ?? ''}
-          onBlur={(event) => void update({ backendUrl: event.target.value.trim() || undefined })}
+          value={backendDraft}
+          onChange={(event) => setBackendDraft(event.target.value)}
           aria-label="RepoGuardian backend URL"
         />
+        <div className="rg-action-row">
+          <button className="rg-button rg-button--primary" type="button" onClick={() => void saveBackend()}>
+            Save backend
+          </button>
+        </div>
+        {backendError ? <p className="rg-inline-error" role="alert">{backendError}</p> : null}
       </section>
 
       <p className="rg-opt-saved" role="status">

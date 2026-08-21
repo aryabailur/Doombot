@@ -1,0 +1,10 @@
+langgraph>=1.2.9
+langchain-core>=1.4
+langchain-groq
+PyGithub
+mcp>=1.28,<2
+fastapi
+python-dotenv
+pydantic
+pytest
+websockets

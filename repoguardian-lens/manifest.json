@@ -3,15 +3,20 @@
   "name": "RepoGuardian Lens",
   "description": "Repository memory, evidence, and contextual agent decisions inside GitHub.",
   "version": "0.1.0",
-  "minimum_chrome_version": "114",
+  "minimum_chrome_version": "116",
   "permissions": [
     "storage",
     "activeTab",
-    "scripting"
+    "scripting",
+    "notifications"
   ],
   "host_permissions": [
     "https://github.com/*",
     "https://api.github.com/*"
+  ],
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*"
   ],
   "background": {
     "service_worker": "src/background/index.ts",

@@ -15,12 +15,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from memory.db import init_db
+from memory import repo as memory_repo
 from mcp_server import client as mcp_client
 from api import monitor
 from api.ws import websocket_endpoint
 from api.routes_repos import router as repos_router
 from api.routes_investigations import router as investigations_router
 from api.routes_feedback import router as feedback_router
+from api.routes_fixlab import router as fixlab_router
 
 
 def _warn_missing_credentials() -> None:
@@ -48,6 +50,11 @@ def _warn_missing_credentials() -> None:
 async def lifespan(app: FastAPI):
     _warn_missing_credentials()
     init_db()
+    interrupted = memory_repo.fail_interrupted_fix_runs()
+    if interrupted:
+        logging.getLogger(__name__).warning(
+            "Marked %d interrupted Fix Lab run(s) as failed.", interrupted
+        )
     await mcp_client.startup()
     # Autonomous monitoring (F01, the compulsory PS-04 feature). No-ops unless
     # DOOMBOT_MONITOR_REPOS names a repository -- it starts investigations on
@@ -83,5 +90,6 @@ app.add_middleware(
 app.include_router(repos_router)
 app.include_router(investigations_router)
 app.include_router(feedback_router)
+app.include_router(fixlab_router)
 
 app.add_api_websocket_route("/ws", websocket_endpoint)

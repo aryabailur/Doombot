@@ -64,14 +64,29 @@ async def run_investigation(
         "repo_name": repo_name,
         "issue_number": number,
         "investigation_id": investigation_id,
+        "repository_policy": repo.get_repository_policy(repo_name),
         "chain": [],
     }
 
-    final: dict = {}
+    # The updates stream contains each node's real state delta. Accumulate it
+    # while forwarding custom trace events so the graph executes exactly once.
+    # Calling ainvoke() after astream() would run every GitHub/model/tool node a
+    # second time and could duplicate side effects outside DEMO_MODE.
+    final: dict = dict(state)
     try:
         async for mode, chunk in issue_app.astream(
             state, stream_mode=["custom", "updates"]
         ):
+            if mode == "updates":
+                for update in chunk.values():
+                    if isinstance(update, dict):
+                        final.update(update)
+                        fetched_title = (update.get("issue_metadata") or {}).get("title")
+                        if fetched_title:
+                            repo.update_investigation_title(
+                                investigation_id, fetched_title
+                            )
+                continue
             if mode != "custom":
                 continue
 
@@ -91,9 +106,6 @@ async def run_investigation(
                     logger.exception("failed to persist step %s", step.get("step_id"))
 
             await ws.broadcast(chunk)
-
-        final = await issue_app.ainvoke(state)
-
     except Exception as exc:
         logger.exception("investigation %s failed", investigation_id)
         repo.complete_investigation(
@@ -115,7 +127,6 @@ async def run_investigation(
 
     decision = final.get("decision") or {}
     action = decision.get("action", "no_action")
-
     repo.complete_investigation(
         investigation_id=investigation_id,
         decision=action,
@@ -123,6 +134,27 @@ async def run_investigation(
         confidence=float(decision.get("confidence") or 0.0),
         impact_score=float(final.get("impact_score") or 0.0),
     )
+
+    # The graph may draft a public comment and labels, but it never writes to
+    # GitHub. Persist the exact payload before broadcasting completion so every
+    # client sees a durable approval item and retries cannot silently change
+    # what the maintainer reviewed.
+    proposal = decision.get("proposal")
+    if proposal and (proposal.get("comment") or proposal.get("labels")):
+        try:
+            repo.create_proposed_action(
+                action_id=str(uuid.uuid4()),
+                investigation_id=investigation_id,
+                repo_name=repo_name,
+                issue_number=number,
+                action=action,
+                comment=proposal.get("comment") or "",
+                labels=list(proposal.get("labels") or []),
+            )
+        except Exception:
+            # The investigation remains valid, but must not imply that an
+            # approval is available if its exact payload was not persisted.
+            logger.exception("failed to persist proposed action for %s", investigation_id)
 
     # Only escalations reach the queue. "no_action" is recorded on the
     # investigation but must not appear as something needing attention --

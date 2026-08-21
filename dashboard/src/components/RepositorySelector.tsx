@@ -52,7 +52,7 @@ const REPO_PATTERN = /^[\w.-]+\/[\w.-]+$/
  * it for not being `owner/repo` would be a pointless obstacle. Trailing
  * `.git`, slashes, and query strings are all stripped.
  */
-export function normalizeRepoInput(raw: string): string | null {
+function normalizeRepoInput(raw: string): string | null {
   let value = raw.trim()
   if (!value) {
     return null

@@ -188,9 +188,14 @@ export class GitHubClient {
    * GitHub's /issues endpoint returns PRs too -- they carry a `pull_request`
    * key. Leaving them in would let a PR be reported as a duplicate issue.
    */
-  async listIssues(owner: string, repo: string, limit = 100): Promise<IssueRecord[]> {
+  async listIssues(
+    owner: string,
+    repo: string,
+    limit = 100,
+    state: 'all' | 'open' = 'all',
+  ): Promise<IssueRecord[]> {
     const raw = await this.get<GitHubIssue[]>(
-      `/repos/${owner}/${repo}/issues?state=all&per_page=${Math.min(limit, 100)}&sort=updated`,
+      `/repos/${owner}/${repo}/issues?state=${state}&per_page=${Math.min(limit, 100)}&sort=updated`,
     )
     return raw.filter((issue) => !issue.pull_request).map(toIssueRecord)
   }

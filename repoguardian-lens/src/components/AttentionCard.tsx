@@ -12,7 +12,11 @@ export function AttentionCard({ item, onOpen }: { item: AttentionItem; onOpen: (
       <div className="rg-attention-copy">
         <div className="rg-attention-meta">
           <span>#{item.issueNumber}</span>
-          <span>{formatPercent(item.confidence)} confidence</span>
+          <span>
+            {item.confidence == null
+              ? 'backend decision'
+              : `${formatPercent(item.confidence)} confidence`}
+          </span>
         </div>
         <h3>{item.title}</h3>
       </div>

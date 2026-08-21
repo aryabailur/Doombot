@@ -65,16 +65,42 @@ type BackendStep = {
  */
 const BUFFER_LIMIT = 60
 
+type ActivityListener = (
+  event: AgentActivityEvent,
+  snapshot: AgentActivityEvent[],
+) => void
+
 export class AgentMonitor {
   private socket?: WebSocket
   private buffer: AgentActivityEvent[] = []
+  private listeners = new Set<ActivityListener>()
+  private investigationRepositories = new Map<string, string>()
+  private activeRepository?: string
   private reconnectDelay = 1_000
+  private reconnectTimer?: ReturnType<typeof setTimeout>
+  private keepAliveTimer?: ReturnType<typeof setInterval>
   private closedByUs = false
   private url?: string
 
   /** Most recent activity, newest first. */
-  snapshot(): AgentActivityEvent[] {
-    return [...this.buffer].reverse()
+  snapshot(repository?: string): AgentActivityEvent[] {
+    const events = repository
+      ? this.buffer.filter(
+          (event) => event.kind === 'connection' || event.repository === repository,
+        )
+      : this.buffer
+    return [...events].reverse()
+  }
+
+  /** Restore the bounded feed after Chrome restarts the MV3 service worker. */
+  restore(events: AgentActivityEvent[]): void {
+    this.buffer = events.slice(-BUFFER_LIMIT)
+  }
+
+  /** Observe newly received events without coupling transport to Chrome APIs. */
+  subscribe(listener: ActivityListener): () => void {
+    this.listeners.add(listener)
+    return () => this.listeners.delete(listener)
   }
 
   connected(): boolean {
@@ -100,8 +126,16 @@ export class AgentMonitor {
 
   disconnect(): void {
     this.closedByUs = true
+    this.clearTimers()
     this.socket?.close()
     this.socket = undefined
+  }
+
+  private clearTimers(): void {
+    if (this.reconnectTimer !== undefined) clearTimeout(this.reconnectTimer)
+    if (this.keepAliveTimer !== undefined) clearInterval(this.keepAliveTimer)
+    this.reconnectTimer = undefined
+    this.keepAliveTimer = undefined
   }
 
   private open(): void {
@@ -117,6 +151,13 @@ export class AgentMonitor {
 
     socket.addEventListener('open', () => {
       this.reconnectDelay = 1_000
+      // Chrome 116+ resets a MV3 service worker's idle timer when WebSocket
+      // traffic is exchanged. The backend intentionally accepts and discards
+      // client text frames, so a small heartbeat keeps autonomous monitoring
+      // alive while the repository is quiet.
+      this.keepAliveTimer = setInterval(() => {
+        if (socket.readyState === WebSocket.OPEN) socket.send('ping')
+      }, 20_000)
       this.push({
         id: `connected-${Date.now()}`,
         kind: 'connection',
@@ -138,12 +179,15 @@ export class AgentMonitor {
     })
 
     socket.addEventListener('close', () => {
+      if (this.socket !== socket) return
+      if (this.keepAliveTimer !== undefined) clearInterval(this.keepAliveTimer)
+      this.keepAliveTimer = undefined
       if (this.closedByUs) return
       // Exponential backoff, capped: the backend is usually restarting, and a
       // tight retry loop in a service worker burns battery for no benefit.
       const delay = this.reconnectDelay
       this.reconnectDelay = Math.min(delay * 2, 30_000)
-      setTimeout(() => {
+      this.reconnectTimer = setTimeout(() => {
         if (!this.closedByUs) this.open()
       }, delay)
     })
@@ -155,6 +199,9 @@ export class AgentMonitor {
   private toActivity(envelope: WsEnvelope): AgentActivityEvent | null {
     switch (envelope.type) {
       case 'activity':
+        if (/starting investigation/i.test(envelope.data.message)) {
+          this.activeRepository = envelope.data.repo_name
+        }
         return {
           id: `activity-${envelope.data.ts}-${envelope.data.message}`,
           kind: 'activity',
@@ -167,11 +214,18 @@ export class AgentMonitor {
       case 'step.started': {
         const step = envelope.data ?? envelope.step
         if (!step) return null
+        const repository =
+          this.investigationRepositories.get(step.investigation_id) ??
+          this.activeRepository
+        if (repository) {
+          this.investigationRepositories.set(step.investigation_id, repository)
+        }
         return {
           id: `${step.step_id}-started`,
           kind: 'step',
           message: step.title,
           investigationId: step.investigation_id,
+          repository,
           state: NODE_STATE[step.name] ?? 'comparing',
           timestamp: step.started_at || new Date().toISOString(),
           severity: 'info',
@@ -182,6 +236,12 @@ export class AgentMonitor {
       case 'step.completed': {
         const step = envelope.data ?? envelope.step
         if (!step) return null
+        const repository =
+          this.investigationRepositories.get(step.investigation_id) ??
+          this.activeRepository
+        if (repository) {
+          this.investigationRepositories.set(step.investigation_id, repository)
+        }
         return {
           id: `${step.step_id}-completed`,
           kind: 'step',
@@ -189,6 +249,7 @@ export class AgentMonitor {
             ? `${step.title} failed: ${step.output_summary}`
             : step.title,
           investigationId: step.investigation_id,
+          repository,
           state: step.status === 'error' ? 'failed' : (NODE_STATE[step.name] ?? 'comparing'),
           timestamp: step.started_at || new Date().toISOString(),
           severity: step.status === 'error' ? 'error' : 'info',
@@ -196,16 +257,23 @@ export class AgentMonitor {
         }
       }
 
-      case 'investigation.completed':
+      case 'investigation.completed': {
+        const repository = this.investigationRepositories.get(
+          envelope.data.investigation_id,
+        )
+        this.investigationRepositories.delete(envelope.data.investigation_id)
+        this.activeRepository = undefined
         return {
           id: `${envelope.data.investigation_id}-done`,
           kind: 'decision',
           message: `Investigation complete: ${envelope.data.decision}`,
           investigationId: envelope.data.investigation_id,
+          repository,
           state: 'completed',
           timestamp: new Date().toISOString(),
           severity: envelope.data.decision === 'escalate' ? 'warning' : 'info',
         }
+      }
 
       default:
         return null
@@ -220,5 +288,7 @@ export class AgentMonitor {
     if (this.buffer.length > BUFFER_LIMIT) {
       this.buffer = this.buffer.slice(-BUFFER_LIMIT)
     }
+    const snapshot = this.snapshot()
+    for (const listener of this.listeners) listener(event, snapshot)
   }
 }

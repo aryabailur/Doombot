@@ -50,11 +50,35 @@ class InvestigationSummary(BaseModel):
     completed_at: str | None
 
 
+ActionStatus = Literal[
+    "proposed", "approved", "rejected", "executing", "verified", "failed"
+]
+
+
+class ProposedAction(BaseModel):
+    id: str
+    investigation_id: str
+    repo_name: str
+    issue_number: int
+    action: str
+    comment: str | None
+    labels: list[str]
+    status: ActionStatus
+    decided_by: str | None
+    decision_note: str | None
+    result: dict | None
+    error: str | None
+    created_at: str
+    decided_at: str | None
+    executed_at: str | None
+
+
 class InvestigationDetail(InvestigationSummary):
     steps: list[StepRecord]
     decision_reason: str | None
     confidence: float | None
     impact_score: float | None
+    proposed_action: ProposedAction | None = None
 
 
 class Escalation(BaseModel):
@@ -110,6 +134,95 @@ class FeedbackRequest(BaseModel):
     investigation_id: str
     step_id: str | None = None
     verdict: Literal["up", "down"]
+    note: str | None = None
+
+
+class ActionDecisionRequest(BaseModel):
+    approved: bool
+    decided_by: str
+    note: str | None = None
+
+
+PolicyGuidance = Literal["observing", "caution", "mixed", "aligned"]
+
+
+class ActionPolicyProfile(BaseModel):
+    action: str
+    samples: int
+    approvals: int
+    rejections: int
+    approval_rate: float
+    guidance: PolicyGuidance
+
+
+class LabelPolicyProfile(BaseModel):
+    label: str
+    samples: int
+    approvals: int
+    rejections: int
+    approval_rate: float
+    guidance: PolicyGuidance
+
+
+class RepositoryPolicy(BaseModel):
+    repo_name: str
+    mode: Literal["observing", "learned"]
+    minimum_samples: int
+    total_decisions: int
+    approvals: int
+    rejections: int
+    approval_rate: float | None
+    actions: list[ActionPolicyProfile]
+    labels: list[LabelPolicyProfile]
+    learned_rules: list[str]
+    updated_at: str | None
+
+
+FixRunStatus = Literal[
+    "queued", "preparing", "generating", "verifying", "proposed", "failed",
+    "approved", "rejected", "publishing", "published",
+]
+
+
+class CreateFixRunRequest(BaseModel):
+    investigation_id: str
+
+
+class FixReceipt(BaseModel):
+    command: list[str]
+    exit_code: int
+    duration_ms: int
+    stdout: str
+    stderr: str
+    containerized: bool
+    network_disabled: bool
+    image: str
+    image_digest: str
+
+
+class FixRun(BaseModel):
+    id: str
+    investigation_id: str
+    repo_name: str
+    issue_number: int
+    status: FixRunStatus
+    base_sha: str | None
+    summary: str | None
+    patch_diff: str | None
+    commands: list[list[str]]
+    receipts: list[FixReceipt]
+    error: str | None
+    decided_by: str | None
+    decision_note: str | None
+    created_at: str
+    updated_at: str
+    decided_at: str | None
+    published_at: str | None
+
+
+class FixDecisionRequest(BaseModel):
+    approved: bool
+    decided_by: str
     note: str | None = None
 
 

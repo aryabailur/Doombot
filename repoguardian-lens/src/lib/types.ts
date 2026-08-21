@@ -2,7 +2,7 @@ export type Decision = 'escalate' | 'silent' | 'follow_up' | 'duplicate'
 
 export type EvidenceSource = {
   id: string
-  type: 'issue' | 'pull_request' | 'commit' | 'discussion' | 'decision'
+  type: 'issue' | 'pull_request' | 'commit' | 'discussion' | 'file' | 'decision'
   title: string
   url?: string
   score?: number
@@ -140,27 +140,79 @@ export type RepositoryMemory = {
     contributors: number
   }
   groups: MemoryGroup[]
+  policy?: RepositoryPolicy
+}
+
+export type FixReceipt = {
+  command: string[]
+  exitCode: number
+  durationMs: number
+  stdout: string
+  stderr: string
+  containerized: boolean
+  networkDisabled: boolean
+  image: string
+  imageDigest: string
+}
+
+export type FixRun = {
+  id: string
+  investigationId: string
+  repository: string
+  issueNumber: number
+  status: 'queued' | 'preparing' | 'generating' | 'verifying' | 'proposed' | 'failed' | 'approved' | 'rejected' | 'publishing' | 'published'
+  baseSha?: string
+  summary?: string
+  patch?: string
+  commands: string[][]
+  receipts: FixReceipt[]
+  error?: string
+}
+
+export type RepositoryPolicyProfile = {
+  action: string
+  samples: number
+  approvals: number
+  rejections: number
+  approvalRate: number
+  guidance: 'observing' | 'caution' | 'mixed' | 'aligned'
+}
+
+export type RepositoryPolicy = {
+  mode: 'observing' | 'learned'
+  minimumSamples: number
+  totalDecisions: number
+  approvals: number
+  rejections: number
+  approvalRate?: number
+  actions: RepositoryPolicyProfile[]
+  learnedRules: string[]
+  updatedAt?: string
 }
 
 export type ActivitySummary = {
+  source: 'demo' | 'github' | 'backend'
   automatedCount: number
   attentionCount: number
   items: Array<{
     issueNumber: number
     title: string
-    confidence: number
+    confidence?: number
     severity: 'critical' | 'warning'
   }>
 }
 
 export type ApprovalAction = {
   id: string
-  kind: 'add_label' | 'post_comment' | 'link_issue' | 'request_information'
+  kind: 'add_label' | 'post_comment' | 'link_issue' | 'request_information' | 'github_update'
   title: string
   detail: string
   reason: string
   evidence: EvidenceSource[]
-  status: 'proposed' | 'approved' | 'rejected'
+  status: 'proposed' | 'approved' | 'rejected' | 'executing' | 'verified' | 'failed'
+  result?: Record<string, unknown>
+  error?: string
+  live?: boolean
 }
 
 export type DecisionFeedback = {
@@ -215,8 +267,10 @@ export type ExtensionMessage =
   | { type: 'GET_PR_REVIEW'; owner: string; repo: string; pullNumber: number }
   | { type: 'GET_HEALTH'; owner: string; repo: string }
   | { type: 'APPROVE_ACTION'; action: ApprovalAction; approved: boolean }
+  | { type: 'START_FIX_RUN'; investigationId: string }
+  | { type: 'DECIDE_FIX_RUN'; runId: string; approved: boolean }
   | { type: 'RECORD_FEEDBACK'; feedback: DecisionFeedback }
-  | { type: 'GET_AGENT_ACTIVITY' }
+  | { type: 'GET_AGENT_ACTIVITY'; owner?: string; repo?: string }
   | { type: 'GET_SETTINGS' }
   | { type: 'SET_SETTINGS'; settings: Partial<LensSettings> }
   | { type: 'RESET_DEMO' }

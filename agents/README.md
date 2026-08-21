@@ -90,7 +90,7 @@ you need a new tool name, announce it — do not add it silently.
 **Triage graph** (`triage_graph.py`) is wired end to end:
 
 ```
-START -> issue_fetcher -> duplicate_detector -> resolver -> security_scanner
+START -> issue_fetcher -> code_investigator -> duplicate_detector -> resolver -> security_scanner
       -> impact_scorer -> labeler -> decider -> END
 ```
 
@@ -104,13 +104,15 @@ issue-relationship graph (F15) and the semantic code graph.
 |---|---|
 | `chain.py` / `@chain_step` | Live — the mechanism everything depends on |
 | PR-review graph | Live |
-| Triage graph, all 7 nodes | Live |
+| Triage graph, all 8 nodes | Live |
+| Code-aware diagnosis | Live — ranked files/symbols plus bounded LLM hypothesis |
 | Duplicate + regression detection (F06) | Live |
 | Security-sensitive detection (F07) | Live — layer-1 keyword matching |
 | Approval-gated labeling (F08) | Live — `ADD_LABELS`, gated |
 | Issue + code graph (F15) | Live |
 | Resolution proposals (F16) | Live — approval-gated |
-| Adaptive repository learning (F17) | Live — few-shot precedents in `agents/triage/labeler.py` |
+| Adaptive repository learning (F17) | Live — issue precedents plus approval/rejection policy injected into later decisions |
+| Verified Fix Lab | Live — explicit code-grounded generation and network-disabled container verification; review does not publish |
 | MCP intelligence layer (F18) | Live — 7 read-only tools, `mcp_server/intelligence.py` |
 
 **There is no OpenAI in this project.** Groq `openai/gpt-oss-120b` for

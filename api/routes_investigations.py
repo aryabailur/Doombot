@@ -365,6 +365,7 @@ async def get_investigation(investigation_id: str) -> InvestigationDetail:
         decision_reason=row.get("decision_reason"),
         confidence=row.get("confidence"),
         impact_score=row.get("impact_score"),
+        proposed_action=repo.get_investigation_action(investigation_id),
     )
 
 

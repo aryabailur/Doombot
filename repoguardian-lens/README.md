@@ -8,16 +8,15 @@ RepoGuardian Lens is a Manifest V3 Chrome/Chromium extension that brings RepoGua
 
 | | Demo repository | Live GitHub |
 |---|---|---|
-| Data | Deterministic seeded fixtures | Public GitHub REST API |
-| Network | None required | `api.github.com` |
-| Credentials | None | None (optional token raises the rate limit) |
-| Retrieval | Curated evidence table | Real issues, ranked by text/subsystem/label overlap |
-| Confidence | Scripted demo values | Measured similarity |
+| Data | Deterministic seeded fixtures | GitHub REST plus backend investigations when configured |
+| Network | None required | `api.github.com` and the user-approved backend origin |
+| Credentials | None | Optional GitHub token; backend credentials stay on the backend |
+| Retrieval | Curated evidence table | Real GitHub issues or persisted backend investigations |
+| Confidence | Scripted demo values | Measured similarity or backend model confidence, explicitly labelled |
 
 Demo mode is the default and the presentation path. Live mode reads whatever
-repository you are viewing; when GitHub is unreachable or rate-limited, the
-panel falls back to demo data **and says so** rather than passing seeded
-results off as live ones.
+repository you are viewing and never substitutes seeded fixtures. When GitHub
+or the backend is unavailable, the panel shows an error and retry action.
 
 Switch modes from the panel header or the options page. Options also accepts an
 optional GitHub token — live mode works without one at GitHub's
@@ -36,12 +35,19 @@ Enable it on the backend with `DOOMBOT_MONITOR_REPOS=owner/repo` in `.env`.
 Keep `DEMO_MODE=1` unless you intend real GitHub writes -- the agent applies
 labels and posts comments otherwise.
 
-### What live mode does not do
+Autonomous events are buffered in `chrome.storage.session`, scoped to the
+repository being viewed, and surfaced through the toolbar badge. Escalations
+also create a browser notification, so the maintainer does not have to leave
+the Lens open to notice important work. Opening an issue is read-only; a manual
+investigation starts only from an explicit **Start investigation** action.
 
-It reports deterministic similarity, keyword-level security and regression
-signals, and computed health metrics. It does **not** perform LLM reasoning, so
-confidence values are honest retrieval scores rather than model judgements. A
-`backendUrl` field is reserved for a future LLM-backed engine.
+### Live result provenance
+
+Without a backend, Live mode reports real GitHub data scored by the local,
+deterministic retrieval engine and labels it **Live GitHub heuristic**. With a
+backend configured, the attention queue comes from persisted investigations
+and unresolved escalations and is labelled **Backend agent decisions**.
+Seeded values are confined to Demo mode.
 
 ## What is implemented
 
@@ -49,8 +55,11 @@ confidence values are honest retrieval scores rather than model judgements. A
 - Shadow DOM injection so GitHub styles cannot affect the Lens UI
 - Deterministic offline agent engine with retrieval, ranking, decisions, and auditable events
 - Repository overview, health snapshot, project memory, and repository X-ray
+- Decision-derived maintainer policy in Memory, calibrated per repository
 - Issue decisions for escalation, silence, incomplete reports, duplicates, and uncertainty
 - Animated investigation trace and clickable SVG evidence graph
+- Code-aware diagnosis with clickable file/line candidates and bounded hypotheses
+- Verified Fix Lab with grounded patch generation, locked-down container tests, exact receipts, and single-use maintainer review
 - Repository-history-aware PR risk context
 - `Cmd/Ctrl + G` command palette and grounded Ask responses
 - Approval-first demo actions, local feedback, and deterministic demo reset
@@ -59,9 +68,19 @@ confidence values are honest retrieval scores rather than model judgements. A
 - Agent tab: live subscription to the backend's autonomous monitoring over `/ws`
 - Options page for data source, optional GitHub token, and backend origin
 
-No API key is bundled. Demo mode works without network access, and neither mode
-ever writes to GitHub — every consequential action stays a proposal until a
-maintainer approves it.
+No API key is bundled. Demo mode and direct-GitHub live mode never write to
+GitHub; their consequential actions remain local proposals. A configured
+RepoGuardian backend drafts exact comments and labels, but writes only
+after an explicit maintainer approval. Keep `DEMO_MODE=1` until testing in a
+disposable repository you control; demo mode blocks execution even after an
+approval attempt.
+
+Fix Lab is deliberately separate from those issue actions. It modifies only
+files retrieved as investigation evidence, caps patch size, and runs tests in a
+network-disabled read-only container. A passing candidate is shown with its
+exact diff, command, exit code, duration, image, and image digest. Approving it
+records the review for audit; this version does not create a branch or pull
+request and never describes approval as publication.
 
 ## Install for development
 
@@ -109,8 +128,14 @@ rm src/background/agent/live.manual.test.ts
 
 ## Safety model
 
-- Permissions are limited to `storage`, `activeTab`, `scripting`, and `https://github.com/*`.
-- Consequential actions are proposals until the maintainer approves or rejects them.
+- Required permissions are limited to `storage`, `activeTab`, `scripting`,
+  `notifications`, GitHub pages, and the GitHub API.
+- Backend origins are optional host permissions granted only when the user saves one.
+- Demo and direct-GitHub actions are proposals until the maintainer approves or rejects them locally.
+- Backend-powered investigations always require explicit approval for writes.
+- Backend investigations ensure a bounded code index before mapping issues to files.
+- Approval/rejection history calibrates repository policy but never enables automatic writes.
+- Fix Lab never runs generated code on the host, never pulls an image during a run, and fails closed when its trusted verifier image is absent.
 - Demo approvals update only `chrome.storage.local`.
 - The trace exposes actions, evidence, decision factors, and outcomes—not hidden model reasoning.
 - Unknown live contexts return an explicit insufficient-evidence state instead of fabricated repository intelligence.
@@ -127,8 +152,7 @@ GitHub URL → context detector → content-script Shadow Root → React Lens
                           evidence-backed structured results
 ```
 
-`MockAgentEngine` (seeded) and `LiveAgentEngine` (GitHub REST) both implement
-the provider-independent `AgentEngine` interface, so the UI is identical in
-either mode. The service worker picks one per request from stored settings and
-degrades from live to seeded on failure. A future LLM-backed engine slots in
-behind the same interface without changing UI contracts or shipping keys.
+`MockAgentEngine` (seeded), `LiveAgentEngine` (GitHub REST), and
+`BackendAgentEngine` (FastAPI/LangGraph) implement the provider-independent
+`AgentEngine` interface. The service worker selects exactly one from stored
+settings. Live failures remain failures; they never cross into seeded data.

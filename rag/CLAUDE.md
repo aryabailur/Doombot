@@ -289,6 +289,13 @@ def find_duplicates(issue_text: str, repo_name: str, exclude_number: int) -> lis
     Fetch a few more than needed (e.g. k=5) since the excluded issue may be
     among the top results and would otherwise crowd out a real match.
     """
+
+def find_code_context(issue_text: str, repo_name: str, limit: int = 4) -> list[dict]:
+    """Return distinct code candidates above MIN_CODE_SIMILARITY.
+
+    Each result contains file_path, optional symbol/line_start, true cosine
+    score, and a bounded snippet. Missing or unindexed code returns [].
+    """
 ```
 
 **Why `exclude_number` is a parameter here, not just handled in
@@ -320,6 +327,8 @@ this correctness for free instead of having to remember to re-implement it.
 |---|---|---|
 | `type` | `str` | always `"file"` |
 | `source` | `str` | file path within the repo, e.g. `"agents/reviewer.py"` |
+| `symbol` | `str` | best-effort declaration name, or an empty string |
+| `line_start` | `int` | 1-based start line of the indexed chunk |
 
 `type` is included on both so a stray cross-collection query (during
 debugging, or if collections are ever merged later) is immediately
@@ -337,17 +346,12 @@ Chroma exposes two different similarity APIs and they are opposite:
 | `similarity_search_with_score` | L2 **distance** | **lower is better** |
 | `similarity_search_with_relevance_scores` | normalized **relevance**, roughly 0-1 | **higher is better** |
 
-**Use `similarity_search_with_relevance_scores`, always, everywhere in this
-package.** The thresholds in this doc and in `agents/CLAUDE.md`
-(`> 0.85` duplicate, `0.65-0.85` related) are written for a 0-1,
-higher-is-better scale. If `retrieve_with_scores` is implemented on top of
-`similarity_search_with_score` instead, those thresholds are silently
-inverted — the "most confident duplicate" result would carry the *lowest*
-number, `> 0.85` would almost never fire, and `duplicate_detector` would
-quietly stop finding real duplicates while still returning results, which
-is the worst kind of bug because nothing throws an exception. This is
-exactly the "invert an L2 distance" trap named in the task brief — do not
-introduce it.
+`retrieve_with_scores` uses `similarity_search_with_score` and converts L2
+distance to true cosine similarity. MiniLM emits normalized vectors, so the
+conversion is `cosine = 1 - (l2 * l2) / 2`. All callers receive a clamped
+0-1, higher-is-better score. Do not return raw L2, and do not switch to
+LangChain's relevance helper: its normalization is not cosine and was measured
+to push a real duplicate below the repository's related threshold.
 
 ---
 

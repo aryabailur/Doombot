@@ -24,7 +24,7 @@ Don't. Two reasons, both load-bearing:
 
 1. **The node sets are genuinely disjoint.** `fetcher`/`reviewer`/
    `test_writer`/`summarizer` share nothing in common with
-   `issue_fetcher`/`duplicate_detector`/`security_scanner`/`impact_scorer`/
+   `issue_fetcher`/`code_investigator`/`duplicate_detector`/`security_scanner`/`impact_scorer`/
    `labeler`/`decider` except the state container. A conditional branch would
    just be dead-code routing around two unrelated pipelines glued into one
    file.
@@ -74,6 +74,7 @@ class GraphState(TypedDict, total=False):
     security_findings: list[dict]                     # [{"keyword": str, "context": str}] (layer 1); LLM-confirmed subset if layer 2 ships
     impact_score: int                                 # 0-100, computed by impact_scorer
     labels: list[str]                                 # labels chosen by labeler (may be "suggested" — see labeler contract)
+    repository_policy: dict                          # approval/rejection preferences injected by the API runner
     decision: dict                                    # {"action": ..., "reason": ..., "confidence": float} from decider
     chain: Annotated[list[dict], add]                 # StepRecord log; add-reducer because every node appends exactly one record
 ```
@@ -248,7 +249,7 @@ citing repo file content.
 
 ## 4. The triage graph — node by node
 
-All six live in `agents/triage/`. Each file exports exactly one
+All triage nodes live in `agents/triage/`. Each file exports exactly one
 `*_node(state: GraphState) -> dict | tuple[dict, list[dict]]` function,
 decorated with `@chain_step`.
 
@@ -263,6 +264,19 @@ decorated with `@chain_step`.
   JSON result into `issue_metadata`. This is the entry point of the graph —
   no upstream node populates `issue_metadata` for it.
 - **`chain_step` title:** `"Fetching issue #{issue_number}"`
+
+### 4.1a `code_investigator`
+
+- **File:** `agents/triage/code_investigator.py`
+- **Reads:** `repo_name`, `issue_metadata`
+- **Writes:** `code_diagnosis`
+- **Does:** retrieves distinct code chunks above `MIN_CODE_SIMILARITY`, citing
+  their file, line, symbol, similarity, and bounded snippet. When candidates
+  exist, an LLM may form one short hypothesis using only those candidates.
+  The primary file must be one of the retrieved paths. An absent index, weak
+  matches, malformed model output, or unavailable model degrades to candidate
+  locations or explicit insufficient evidence; it never invents a file.
+- **`chain_step` title:** `"Mapping issue to code"`
 
 ### 4.2 `duplicate_detector`
 
@@ -341,22 +355,19 @@ decorated with `@chain_step`.
 - **Writes:** `labels`
 - **Does:** classifies the issue (bug / feature / question / security /
   duplicate / stale, etc.) and picks candidate GitHub labels. Confidence
-  threshold is **0.85**:
-  - confidence `>= 0.85` -> **auto-apply**: the labels go into `labels` and
-    `decider` will call `ADD_LABELS` for real.
-  - confidence `< 0.85` -> **suggest only**: still populate `labels`, but
-    tag the result (e.g. an extra `labels_confidence` note in evidence, or a
-    `suggested: true` marker your implementation defines) so `decider` knows
-    not to apply them automatically — a human approves first.
+  threshold is **0.85**. Labels at or above the threshold are eligible for a
+  proposed action; lower-confidence labels remain suggestions. Neither path
+  writes to GitHub until a maintainer approves the persisted proposal.
   This node never calls GitHub itself; it only decides what *would* be
-  applied. `decider` is the only node with GitHub side effects (§4.6).
+  applied.
 - **`chain_step` title:** `"Classifying and labeling"`
 
 ### 4.6 `decider`
 
 - **File:** `agents/triage/decider.py`
 - **Reads:** `duplicates`, `security_findings`, `impact_score`, `labels`
-- **Writes:** `decision` (`{"action": str, "reason": str, "confidence": float}`)
+- **Writes:** `decision` (`{"action": str, "reason": str, "confidence": float,
+  "proposal": {"comment": str, "labels": list[str], "requires_approval": bool}}`)
 - **Does:** the terminal node. Picks exactly one action:
   - `"escalate"` — security finding, or high impact score, or otherwise
     needs a maintainer's eyes. Posts nothing destructive; typically just
@@ -372,9 +383,14 @@ decorated with `@chain_step`.
     action and comments, but does not silently no-op the "close" part.
   - `"no_action"` — nothing rises to the other three; still recorded so the
     dashboard can show "triaged, no action needed" instead of looking stuck.
-  This is the **only** node in the triage graph that performs real GitHub
-  side effects, via the same MCP-spawn pattern used elsewhere
+  The graph is draft-only: it returns the exact comment and labels as a
+  proposal. The API persists that payload, and only the explicit approval
+  endpoint may execute it through the MCP-spawn pattern
   (`mcp_server/tool_names.py` constants: `POST_ISSUE_COMMENT`, `ADD_LABELS`).
+  When `repository_policy` contains prior decisions for the same action, the
+  node cites approval/rejection counts as separate rule evidence. This
+  preference signal may calibrate the recommendation explanation, but it must
+  never replace issue evidence or bypass approval.
 - **`chain_step` title:** `"Deciding next action"`
 
 ### 4.7 Graph wiring
@@ -384,7 +400,9 @@ decorated with `@chain_step`.
 from langgraph.graph import StateGraph, START, END
 from agents.state import GraphState
 from agents.triage.issue_fetcher import issue_fetcher_node
+from agents.triage.code_investigator import code_investigator_node
 from agents.triage.duplicate_detector import duplicate_detector_node
+from agents.triage.resolver import resolver_node
 from agents.triage.security_scanner import security_scanner_node
 from agents.triage.impact_scorer import impact_scorer_node
 from agents.triage.labeler import labeler_node
@@ -392,15 +410,19 @@ from agents.triage.decider import decider_node
 
 graph = StateGraph(GraphState)
 graph.add_node("issue_fetcher", issue_fetcher_node)
+graph.add_node("code_investigator", code_investigator_node)
 graph.add_node("duplicate_detector", duplicate_detector_node)
+graph.add_node("resolver", resolver_node)
 graph.add_node("security_scanner", security_scanner_node)
 graph.add_node("impact_scorer", impact_scorer_node)
 graph.add_node("labeler", labeler_node)
 graph.add_node("decider", decider_node)
 
 graph.add_edge(START, "issue_fetcher")
-graph.add_edge("issue_fetcher", "duplicate_detector")
-graph.add_edge("duplicate_detector", "security_scanner")
+graph.add_edge("issue_fetcher", "code_investigator")
+graph.add_edge("code_investigator", "duplicate_detector")
+graph.add_edge("duplicate_detector", "resolver")
+graph.add_edge("resolver", "security_scanner")
 graph.add_edge("security_scanner", "impact_scorer")
 graph.add_edge("impact_scorer", "labeler")
 graph.add_edge("labeler", "decider")
@@ -614,18 +636,12 @@ issue costs the maintainer trust as well as time.
 
 ### The write is gated twice
 
-Posting is **off by default**. `DESIGN.md` §12 makes "publish public comment"
-approval-required, and this is the riskiest write in the product.
-
-| `DOOMBOT_AUTO_RESOLVE` | `DEMO_MODE` | Posts? |
-|---|---|---|
-| unset | any | No — draft held for approval |
-| `1` | unset/`0` | Only if confidence >= 0.80 |
-| `1` | `1` | No — `DEMO_MODE` always wins |
-
-The gate lives in `decider`, not here, because `decider` is the only node
-permitted GitHub side effects. Keeping the decision to write and the write
-itself in one place is what makes it auditable.
+Posting is **approval-only**. `DESIGN.md` §12 makes "publish public comment"
+approval-required, and this is the riskiest write in the product. The graph
+always drafts; `DEMO_MODE=1` makes the approval endpoint inert, while live
+mode requires a maintainer decision before it can execute the persisted
+payload. The separate proposal, decision, execution, and receipt records make
+the boundary auditable and idempotent.
 
 ### Decision priority
 

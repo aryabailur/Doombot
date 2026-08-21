@@ -2,16 +2,16 @@
 
 Node: decider
 Reads:  duplicates, security_findings, impact_score, labels
-Writes: decision -> {action, reason, confidence}
+Writes: decision -> {action, reason, confidence, proposal}
 
-The ONLY node in the triage graph that performs real GitHub side effects.
+This node is draft-only. It records the exact GitHub change for review; the
+API approval endpoint owns every real side effect.
 
 Escalation categories per finalFeatures.md section 4: security, stale,
 duplicate, high-impact. Low-confidence results are held back rather than
 creating noise.
 """
 
-import asyncio
 import json
 import os
 
@@ -52,7 +52,7 @@ def _root_cause(exc: BaseException, depth: int = 0) -> str:
     return f"{type(exc).__name__}: {exc}"
 
 
-def _writes_enabled() -> bool:
+def writes_enabled() -> bool:
     """Whether this run may touch GitHub.
 
     DEMO_MODE=1 makes the graph fully inert against the real world -- it
@@ -99,7 +99,12 @@ async def _already_commented(session, repo_name: str, issue_number: int) -> bool
     return any(COMMENT_MARKER in c.get("body", "") for c in json.loads(_tool_text(result)))
 
 
-async def _apply(repo_name: str, issue_number: int, comment: str, labels: list[str]) -> dict:
+async def apply_approved_action(
+    repo_name: str,
+    issue_number: int,
+    comment: str,
+    labels: list[str],
+) -> dict:
     """Post the comment and add labels in one MCP session.
 
     Idempotent: a second run on the same issue adds labels that are missing
@@ -256,39 +261,53 @@ def _compose_comment(decision: dict, state: GraphState) -> str:
 
 @chain_step("decider", "Deciding next action")
 def decider_node(state: GraphState) -> tuple[dict, list[dict]]:
-    """Choose an action and perform the approved GitHub side effects.
+    """Choose an action and draft, but never perform, GitHub side effects.
 
-    Labels are applied only when the labeler cleared its confidence
-    threshold. Below it, they stay suggestions for a human -- per DESIGN.md's
-    autonomy policy, applying a label is approval-required by default.
+    Investigation is autonomous; public writes are approval-controlled. The
+    exact comment and labels are returned inside ``decision.proposal`` so the
+    API can persist them, show them verbatim to a maintainer, and execute them
+    exactly once after approval. Keeping execution out of the graph also makes
+    replays and retries safe: rerunning a node cannot post twice.
 
-    Closing is never performed here. The contract says not to silently no-op
-    a close, so the action is recorded and the comment posted, but the issue
-    is left open for a maintainer to close.
+    Closing remains a recommendation only. There is no close tool in the
+    approved action executor, so a duplicate proposal contains a comment and
+    labels while the issue remains open for a maintainer.
     """
     decision = _decide(state)
+    # Draft public text from issue evidence only. Maintainer preference history
+    # belongs in the private trace and must not leak into a GitHub comment.
     comment = _compose_comment(decision, state)
-
-    # F16 safety gate. A drafted resolution is posted only when the resolver
-    # marked it auto_post, which requires DOOMBOT_AUTO_RESOLVE=1 *and* a
-    # confidence above its threshold. Otherwise the draft is recorded and a
-    # maintainer approves it from the dashboard.
-    #
-    # The gate lives here rather than in the resolver because decider is the
-    # only node permitted GitHub side effects -- keeping the decision to write
-    # and the write itself in one place is what makes this auditable.
-    resolution = state.get("resolution")
-    held_for_approval = False
-    if decision["action"] == "resolve" and not (resolution or {}).get("auto_post"):
-        comment = ""
-        held_for_approval = True
-
+    policy = state.get("repository_policy") or {}
+    action_policy = next(
+        (
+            item for item in policy.get("actions", [])
+            if item.get("action") == decision["action"]
+        ),
+        None,
+    )
+    if action_policy:
+        decision["policy"] = {
+            "mode": policy.get("mode", "observing"),
+            **action_policy,
+        }
+        if action_policy.get("samples", 0) >= policy.get("minimum_samples", 3):
+            decision["reason"] += (
+                " Maintainer policy history: "
+                f"{action_policy.get('approvals', 0)} of "
+                f"{action_policy.get('samples', 0)} similar proposals approved "
+                f"({action_policy.get('guidance', 'mixed')})."
+            )
     if comment:
         comment = comment + "\n\n" + COMMENT_MARKER
 
     labels = state.get("labels") or []
-    suggested = state.get("labels_suggested", True)
-    labels_to_apply = [] if suggested else labels
+    proposal = None
+    if comment or labels:
+        proposal = {
+            "comment": comment,
+            "labels": labels,
+            "requires_approval": True,
+        }
 
     evidence = [
         {
@@ -299,46 +318,38 @@ def decider_node(state: GraphState) -> tuple[dict, list[dict]]:
         }
     ]
 
-    if held_for_approval:
+    if proposal:
         evidence.append({
-            "type": "rule", "ref": "resolution_held", "score": None,
+            "type": "rule", "ref": "approval_required", "score": None,
             "snippet": (
-                "resolution drafted but not posted -- approve it from the "
-                "dashboard, or set DOOMBOT_AUTO_RESOLVE=1 to allow auto-posting"
+                "GitHub comment and label changes are proposed only; a "
+                "maintainer must approve the exact payload before execution"
             ),
         })
 
-    if not _writes_enabled():
+    if action_policy:
+        evidence.append({
+            "type": "rule",
+            "ref": "repository_policy",
+            "score": action_policy.get("approval_rate"),
+            "snippet": (
+                f"Repository history for {decision['action']}: "
+                f"{action_policy.get('approvals', 0)} approved and "
+                f"{action_policy.get('rejections', 0)} rejected; guidance is "
+                f"{action_policy.get('guidance', 'observing')}. This does not "
+                "bypass approval or replace evidence confidence."
+            ),
+        })
+
+    if not writes_enabled():
         evidence.append({
             "type": "rule", "ref": "demo_mode", "score": None,
-            "snippet": "DEMO_MODE=1 — decision recorded, nothing posted to GitHub",
-        })
-        return {"decision": {**decision, "applied": None}}, evidence
-
-    applied = None
-    if comment or labels_to_apply:
-        try:
-            applied = asyncio.run(
-                _apply(state["repo_name"], state["issue_number"], comment, labels_to_apply)
-            )
-        except Exception as exc:
-            # A failed write must not lose the decision -- the dashboard still
-            # shows what Doombot concluded and that the write needs a retry.
-            # MCP wraps failures in an anyio ExceptionGroup whose str() is the
-            # useless "unhandled errors in a TaskGroup", so unwrap to the real
-            # cause; a 403 here means the token lacks Issues:write, and the
-            # operator needs to be told that, not the plumbing.
-            detail = _root_cause(exc)
-            evidence.append({
-                "type": "rule", "ref": "write_failed", "score": None,
-                "snippet": f"GitHub write failed: {detail}",
-            })
-            return {"decision": {**decision, "applied": {"error": detail}}}, evidence
-
-    if suggested and labels:
-        evidence.append({
-            "type": "rule", "ref": "labels_suggested", "score": None,
-            "snippet": f"labels {labels} held for approval (below confidence threshold)",
+            "snippet": (
+                "DEMO_MODE=1 — decision and proposal recorded; approved "
+                "actions remain blocked from GitHub"
+            ),
         })
 
-    return {"decision": {**decision, "applied": applied}}, evidence
+    return {
+        "decision": {**decision, "proposal": proposal, "applied": None}
+    }, evidence

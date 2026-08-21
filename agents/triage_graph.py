@@ -10,6 +10,7 @@ Purely linear, same style as orchestrator.py. No conditional edges in v1.
 from langgraph.graph import END, START, StateGraph
 
 from agents.state import GraphState
+from agents.triage.code_investigator import code_investigator_node
 from agents.triage.decider import decider_node
 from agents.triage.duplicate_detector import duplicate_detector_node
 from agents.triage.impact_scorer import impact_scorer_node
@@ -20,6 +21,7 @@ from agents.triage.security_scanner import security_scanner_node
 
 graph = StateGraph(GraphState)
 graph.add_node("issue_fetcher", issue_fetcher_node)
+graph.add_node("code_investigator", code_investigator_node)
 graph.add_node("duplicate_detector", duplicate_detector_node)
 graph.add_node("resolver", resolver_node)
 graph.add_node("security_scanner", security_scanner_node)
@@ -28,7 +30,8 @@ graph.add_node("labeler", labeler_node)
 graph.add_node("decider", decider_node)
 
 graph.add_edge(START, "issue_fetcher")
-graph.add_edge("issue_fetcher", "duplicate_detector")
+graph.add_edge("issue_fetcher", "code_investigator")
+graph.add_edge("code_investigator", "duplicate_detector")
 # resolver sits between duplicates and security: it needs the similarity
 # search, and must not pre-empt a security escalation.
 graph.add_edge("duplicate_detector", "resolver")

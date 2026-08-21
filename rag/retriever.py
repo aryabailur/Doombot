@@ -1,6 +1,12 @@
 from rag.embedder import get_collection
 
 
+# Code chunks are shorter and lexically noisier than whole issues, so they use
+# their own conservative floor. A match below this is not presented as a likely
+# location; an empty result is preferable to an invented root cause.
+MIN_CODE_SIMILARITY = 0.40
+
+
 def retrieve(query, repo_name):
     """EXISTING — keep signature and behavior unchanged. Searches the
     `{repo}-code` collection via similarity_search(query, k=3). reviewer.py
@@ -61,6 +67,61 @@ def retrieve_with_scores(query: str, repo_name: str, kind: str = "issues", k: in
         cosine = 1.0 - (l2 * l2) / 2.0
         scored.append((doc, max(0.0, min(1.0, cosine))))
     return scored
+
+
+def find_code_context(
+    issue_text: str,
+    repo_name: str,
+    limit: int = 4,
+) -> list[dict]:
+    """Return distinct, similarity-ranked source locations for an issue.
+
+    Results are candidates, never asserted root causes. Missing/unindexed code
+    is a normal empty result so the agent can report insufficient evidence.
+    """
+    if not issue_text.strip():
+        return []
+    try:
+        raw = retrieve_with_scores(
+            issue_text,
+            repo_name,
+            kind="code",
+            k=max(limit * 3, 8),
+        )
+    except Exception:
+        return []
+
+    candidates: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for doc, score in raw:
+        if score < MIN_CODE_SIMILARITY:
+            continue
+        metadata = doc.metadata or {}
+        path = str(metadata.get("source") or "").replace("\\", "/")
+        if not path:
+            continue
+        symbol = str(metadata.get("symbol") or "")
+        key = (path, symbol or (doc.page_content or "")[:80])
+        if key in seen:
+            continue
+        seen.add(key)
+
+        line_value = metadata.get("line_start")
+        try:
+            line_start = max(1, int(line_value))
+        except (TypeError, ValueError):
+            line_start = None
+        compact = " ".join((doc.page_content or "").strip().split())
+        candidates.append({
+            "file_path": path,
+            "symbol": symbol or None,
+            "line_start": line_start,
+            "score": round(score, 3),
+            "snippet": compact[:240],
+        })
+        if len(candidates) >= limit:
+            break
+    return candidates
 
 
 def find_duplicates(issue_text: str, repo_name: str, exclude_number=None) -> dict:

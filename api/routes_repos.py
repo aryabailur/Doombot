@@ -16,11 +16,12 @@ summary, since nothing schedules brief generation yet.
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from datetime import datetime, timezone
 from functools import lru_cache
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from api import health as health_service
 from api.schemas import (
@@ -41,6 +42,9 @@ from memory import repo as store
 from rag.graph import build_code_graph, build_graph
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+_index_jobs: dict[str, IndexJobResponse] = {}
+_repo_index_jobs: dict[str, str] = {}
 
 
 def _now_iso() -> str:
@@ -98,22 +102,63 @@ async def list_repos() -> list[RepoSummary]:
 
 @router.post("/api/repos/{owner}/{repo}/index", response_model=IndexJobResponse)
 async def trigger_index(owner: str, repo: str) -> IndexJobResponse:
-    """Index a repository's issues into the RAG store.
+    """Ensure repository code and issues are indexed in the RAG store.
 
     Runs in a thread: embedding is CPU-bound and would block the event loop,
     stalling the WebSocket that the live trace depends on.
     """
     repo_name = f"{owner}/{repo}"
 
-    async def _index() -> None:
-        from rag.embedder import index_issues
+    existing_id = _repo_index_jobs.get(repo_name)
+    if existing_id:
+        existing = _index_jobs.get(existing_id)
+        if existing and existing.status in {"queued", "running"}:
+            return existing
 
-        await asyncio.to_thread(index_issues, repo_name, "all", 200)
+    from rag.embedder import collection_count
+
+    def index_counts() -> tuple[int, int]:
+        return (
+            collection_count(repo_name, "code"),
+            collection_count(repo_name, "issues"),
+        )
+
+    code_count, issue_count = await asyncio.to_thread(index_counts)
+    if code_count and issue_count:
+        return IndexJobResponse(job_id="ready", status="ready")
+
+    job_id = str(uuid.uuid4())
+    _index_jobs[job_id] = IndexJobResponse(job_id=job_id, status="queued")
+    _repo_index_jobs[repo_name] = job_id
+
+    async def _index() -> None:
+        from rag.embedder import index_issues, index_repo_files
+
+        _index_jobs[job_id] = IndexJobResponse(job_id=job_id, status="running")
+        try:
+            await asyncio.to_thread(index_repo_files, repo_name)
+            await asyncio.to_thread(index_issues, repo_name, "all", 200)
+        except Exception:
+            logger.exception("repository index job %s failed for %s", job_id, repo_name)
+            _index_jobs[job_id] = IndexJobResponse(job_id=job_id, status="error")
+        else:
+            _index_jobs[job_id] = IndexJobResponse(job_id=job_id, status="done")
 
     # Their cache would otherwise serve a pre-index graph.
     _cached_code_graph.cache_clear()
     asyncio.create_task(_index())
-    return IndexJobResponse(job_id=str(uuid.uuid4()), status="queued")
+    return _index_jobs[job_id]
+
+
+@router.get("/api/index-jobs/{job_id}", response_model=IndexJobResponse)
+async def get_index_job(job_id: str) -> IndexJobResponse:
+    """Return current in-process indexing status."""
+    if job_id == "ready":
+        return IndexJobResponse(job_id="ready", status="ready")
+    job = _index_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="index job not found")
+    return job
 
 
 @router.get("/api/repos/{owner}/{repo}/health", response_model=HealthResponse)

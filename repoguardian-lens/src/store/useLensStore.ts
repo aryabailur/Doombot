@@ -7,6 +7,7 @@ import type {
   DuplicateResult,
   ExtensionMessage,
   ExtensionResponse,
+  FixRun,
   GitHubContext,
   GroundedAnswer,
   HealthReport,
@@ -33,6 +34,7 @@ type LensState = {
   activity?: ActivitySummary
   insight?: Insight
   investigation?: Investigation
+  fixRun?: FixRun
   duplicates: DuplicateResult[]
   prReview?: PRReview
   memory?: RepositoryMemory
@@ -51,6 +53,8 @@ type LensState = {
   setDemoMode: (enabled: boolean) => Promise<void>
   initialize: (context: GitHubContext) => Promise<void>
   runInvestigation: () => Promise<void>
+  startFixRun: () => Promise<void>
+  decideFixRun: (approved: boolean) => Promise<void>
   loadMemory: () => Promise<void>
   refreshAgentFeed: () => Promise<void>
   loadDuplicates: () => Promise<void>
@@ -119,8 +123,24 @@ export const useLensStore = create<LensState>((set, get) => ({
       loading: 'Retrieving project memory',
       error: null,
       notice: null,
-      view: context.type === 'pull_request' ? 'pr' : 'overview',
+      // Opening an issue must stay read-only. The backend graph can perform
+      // configured GitHub actions, so an investigation begins only after the
+      // maintainer explicitly clicks Start investigation. Autonomous runs are
+      // displayed separately in the Agent feed.
+      view:
+        context.type === 'pull_request'
+          ? 'pr'
+          : context.type === 'issue'
+            ? 'investigation'
+            : 'overview',
       investigation: undefined,
+      fixRun: undefined,
+      repository: undefined,
+      health: undefined,
+      activity: undefined,
+      insight: undefined,
+      prReview: undefined,
+      memory: undefined,
       duplicates: [],
       answer: undefined,
     })
@@ -131,11 +151,6 @@ export const useLensStore = create<LensState>((set, get) => ({
         send<HealthReport>({ type: 'GET_HEALTH', ...coordinates }),
         send<ActivitySummary>({ type: 'GET_ACTIVITY', ...coordinates }),
       ])
-      const investigation =
-        context.type === 'issue'
-          ? await send<Investigation>({ type: 'RUN_INVESTIGATION', ...coordinates, issueNumber: context.issueNumber })
-          : undefined
-      const insight = investigation?.insight
       const prReview =
         context.type === 'pull_request'
           ? await send<PRReview>({ type: 'GET_PR_REVIEW', ...coordinates, pullNumber: context.pullNumber })
@@ -144,8 +159,9 @@ export const useLensStore = create<LensState>((set, get) => ({
         repository,
         health,
         activity,
-        insight,
-        investigation,
+        insight: undefined,
+        investigation: undefined,
+        fixRun: undefined,
         prReview,
         loading: null,
         status: 'online',
@@ -154,14 +170,20 @@ export const useLensStore = create<LensState>((set, get) => ({
     } catch (error) {
       set({
         loading: null,
+        status: 'attention',
         error: error instanceof Error ? error.message : 'RepoGuardian could not load repository context.',
       })
     }
   },
 
   runInvestigation: async () => {
-    const { context } = get()
+    const { context, loading } = get()
     if (context.type !== 'issue') return
+    // Zustand updates synchronously, so the first click sets this sentinel
+    // before a second click can dispatch another POST. A backend investigation
+    // is expensive and may eventually propose a GitHub action; duplicate runs
+    // are not a harmless UI inconvenience.
+    if (loading === 'Searching project history') return
     set({ status: 'investigating', loading: 'Searching project history', error: null, view: 'investigation' })
     try {
       const investigation = await send<Investigation>({
@@ -180,10 +202,45 @@ export const useLensStore = create<LensState>((set, get) => ({
     }
   },
 
+  startFixRun: async () => {
+    const { investigation, loading } = get()
+    if (!investigation || loading === 'Generating and verifying candidate fix') return
+    set({ loading: 'Generating and verifying candidate fix', error: null })
+    try {
+      const fixRun = await send<FixRun>({
+        type: 'START_FIX_RUN',
+        investigationId: investigation.runId,
+      })
+      set({ fixRun, loading: null })
+    } catch (error) {
+      set({
+        loading: null,
+        error: error instanceof Error ? error.message : 'The candidate fix could not be generated.',
+      })
+    }
+  },
+
+  decideFixRun: async (approved) => {
+    const { fixRun } = get()
+    if (!fixRun || fixRun.status !== 'proposed') return
+    try {
+      const updated = await send<FixRun>({
+        type: 'DECIDE_FIX_RUN',
+        runId: fixRun.id,
+        approved,
+      })
+      set({ fixRun: updated, error: null })
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : 'The fix decision could not be stored.' })
+    }
+  },
+
   refreshAgentFeed: async () => {
     try {
+      const coordinates = repositoryCoordinates(get().context)
       const feed = await send<{ connected: boolean; events: AgentActivityEvent[] }>({
         type: 'GET_AGENT_ACTIVITY',
+        ...coordinates,
       })
       set({ agentEvents: feed.events, agentConnected: feed.connected })
     } catch {
@@ -239,12 +296,12 @@ export const useLensStore = create<LensState>((set, get) => ({
 
   decideApproval: async (action, approved) => {
     try {
-      await send({ type: 'APPROVE_ACTION', action, approved })
+      const updated = await send<ApprovalAction>({ type: 'APPROVE_ACTION', action, approved })
       set((state) => ({
         investigation: state.investigation
           ? {
               ...state.investigation,
-              approval: { ...action, status: approved ? 'approved' : 'rejected' },
+              approval: updated,
             }
           : state.investigation,
       }))
@@ -266,7 +323,7 @@ export const useLensStore = create<LensState>((set, get) => ({
     try {
       await send({ type: 'RESET_DEMO' })
       const context = get().context
-      set({ investigation: undefined, answer: undefined, duplicates: [], loading: null })
+      set({ investigation: undefined, fixRun: undefined, answer: undefined, duplicates: [], loading: null })
       await get().initialize(context)
     } catch (error) {
       set({ loading: null, error: error instanceof Error ? error.message : 'Demo reset failed.' })

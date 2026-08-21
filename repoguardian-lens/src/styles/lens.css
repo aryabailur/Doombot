@@ -948,6 +948,68 @@ button.rg-evidence-chip:hover { background: color-mix(in srgb, var(--lens-live) 
 
 .rg-feed-spin { animation: rg-feed-rotate 900ms linear infinite; }
 
+/* Verified Fix Lab: every state maps to a persisted backend fix run. */
+.rg-fix-lab {
+  background: color-mix(in srgb, var(--lens-primary) 4%, var(--lens-surface));
+  border: 1px solid color-mix(in srgb, var(--lens-primary) 30%, var(--lens-border));
+  border-radius: 11px;
+  margin: 14px 0;
+  padding: 15px;
+}
+
+.rg-fix-lab__heading {
+  align-items: flex-start;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.rg-fix-lab__heading h2 {
+  align-items: center;
+  display: flex;
+  font-size: 14px;
+  gap: 7px;
+  margin: 4px 0 0;
+}
+
+.rg-fix-lab__heading h2 svg { color: var(--lens-primary); }
+.rg-fix-lab__guard { align-items: center; color: var(--lens-success); display: flex; font: 8px 'JetBrains Mono', ui-monospace, monospace; gap: 4px; letter-spacing: .06em; text-transform: uppercase; }
+.rg-fix-lab__copy { color: var(--lens-secondary); font-size: 10px; line-height: 1.6; margin: 12px 0; }
+.rg-fix-lab__note { color: var(--lens-muted); font-size: 9px; line-height: 1.5; margin: 9px 0 0; }
+
+.rg-fix-lab__status,
+.rg-fix-lab__outcome {
+  align-items: flex-start;
+  background: var(--lens-canvas);
+  border: 1px solid var(--lens-border);
+  border-radius: 8px;
+  display: flex;
+  gap: 9px;
+  margin-top: 13px;
+  padding: 10px;
+}
+
+.rg-fix-lab__status strong,
+.rg-fix-lab__outcome strong { display: block; font-size: 10px; }
+.rg-fix-lab__status small { color: var(--lens-muted); display: block; font-size: 8px; margin-top: 3px; }
+.rg-fix-lab__outcome p { color: var(--lens-secondary); font-size: 9px; line-height: 1.5; margin: 3px 0 0; }
+.rg-fix-lab__outcome.is-passed { border-color: color-mix(in srgb, var(--lens-success) 38%, var(--lens-border)); }
+.rg-fix-lab__outcome.is-passed > svg { color: var(--lens-success); flex: none; }
+.rg-fix-lab__outcome.is-failed { border-color: color-mix(in srgb, var(--lens-danger) 38%, var(--lens-border)); }
+.rg-fix-lab__outcome.is-failed > svg { color: var(--lens-danger); flex: none; }
+
+.rg-fix-lab__receipts { display: grid; gap: 6px; margin-top: 13px; }
+.rg-fix-receipt { background: var(--lens-canvas); border-left: 2px solid var(--lens-success); display: grid; gap: 3px; padding: 8px 9px; }
+.rg-fix-receipt code { color: var(--lens-text); font: 8px 'JetBrains Mono', ui-monospace, monospace; overflow-wrap: anywhere; }
+.rg-fix-receipt span { color: var(--lens-success); font: 8px 'JetBrains Mono', ui-monospace, monospace; }
+.rg-fix-receipt span.is-failed { color: var(--lens-danger); }
+.rg-fix-receipt small { color: var(--lens-dim); font-size: 8px; }
+
+.rg-fix-lab__patch { border-top: 1px solid var(--lens-border); margin-top: 13px; padding-top: 10px; }
+.rg-fix-lab__patch summary { color: var(--lens-secondary); cursor: pointer; font-size: 9px; }
+.rg-fix-lab__patch pre { background: var(--lens-canvas); color: var(--lens-secondary); font: 8px/1.55 'JetBrains Mono', ui-monospace, monospace; margin: 8px 0 0; max-height: 280px; overflow: auto; padding: 9px; white-space: pre; }
+.rg-fix-lab .rg-action-row { margin-top: 12px; }
+
 @keyframes rg-feed-rotate {
   to { transform: rotate(360deg); }
 }

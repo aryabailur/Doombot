@@ -4,6 +4,8 @@ from mcp_server.github_client import get_issues
 from langchain_core.documents import Document
 import os
 from pathlib import Path
+import re
+from concurrent.futures import ThreadPoolExecutor
 
 # langchain_huggingface, langchain_chroma, and langchain_text_splitters are
 # imported INSIDE the functions
@@ -18,6 +20,24 @@ from pathlib import Path
 # The model is only loaded the first time something actually needs to
 # embed or query, and every subsequent call reuses the same instance.
 _model = None
+
+_CODE_EXTENSIONS = {
+    ".py", ".js", ".jsx", ".ts", ".tsx", ".java", ".go", ".rs", ".rb",
+    ".php", ".cs", ".c", ".cc", ".cpp", ".h", ".hpp", ".swift", ".kt",
+}
+
+
+_SYMBOL_PATTERN = re.compile(
+    r"^\s*(?:export\s+)?(?:async\s+)?(?:def|class|function)\s+([A-Za-z_$][\w$]*)"
+    r"|^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=",
+    re.MULTILINE,
+)
+
+
+def _chunk_symbol(content: str) -> str:
+    """Best-effort declaration name stored with a code chunk."""
+    match = _SYMBOL_PATTERN.search(content)
+    return next((group for group in match.groups() if group), "") if match else ""
 
 
 def _get_model():
@@ -64,10 +84,27 @@ def index_repo_files(repo_name: str) -> int:
     exactly as before — code chunking policy is unchanged. Deterministic
     ids so re-running upserts instead of duplicating.
     """
-    file_paths = get_repo_files(repo_name)
-    file_content = []
-    for file in file_paths:
-        file_content.append(get_file_content(repo_name, file))
+    max_files = max(1, int(os.getenv("MAX_CODE_INDEX_FILES", "80")))
+    file_paths = [
+        path for path in get_repo_files(repo_name)
+        if Path(path).suffix.lower() in _CODE_EXTENSIONS
+    ]
+    file_paths.sort(key=lambda path: (path.count("/"), path))
+    file_paths = file_paths[:max_files]
+
+    def read_file(path: str) -> tuple[str, str | None]:
+        try:
+            return path, get_file_content(repo_name, path)
+        except Exception:
+            return path, None
+
+    source_content: dict[str, str] = {}
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for path, content in pool.map(read_file, file_paths):
+            if content is not None:
+                source_content[path] = content
+    file_paths = list(source_content)
+    file_content = [source_content[path] for path in file_paths]
 
     from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -84,17 +121,43 @@ def index_repo_files(repo_name: str) -> int:
     # Build deterministic ids per (path, chunk_index) so re-running this
     # function upserts existing chunks instead of duplicating them.
     per_source_index = {}
+    source_cursor: dict[str, int] = {}
     ids = []
     for doc in split_file_content_doc:
         source = doc.metadata.get("source", "")
         idx = per_source_index.get(source, 0)
         ids.append(f"file-{source}-{idx}")
         per_source_index[source] = idx + 1
+        full_content = source_content.get(source, "")
+        offset = full_content.find(doc.page_content, source_cursor.get(source, 0))
+        if offset < 0:
+            offset = full_content.find(doc.page_content)
+        if offset >= 0:
+            source_cursor[source] = offset + len(doc.page_content)
+        doc.metadata["line_start"] = full_content.count("\n", 0, max(0, offset)) + 1
+        doc.metadata["symbol"] = _chunk_symbol(doc.page_content)
 
     vector_db = get_collection(repo_name, "code")
     if split_file_content_doc:
         vector_db.add_documents(documents=split_file_content_doc, ids=ids)
     return len(split_file_content_doc)
+
+
+def collection_count(repo_name: str, kind: str) -> int:
+    """Return indexed count without loading the embedding model."""
+    import chromadb
+
+    root = Path(__file__).resolve().parents[1]
+    configured = Path(os.environ.get("CHROMA_DIR") or "chroma_db")
+    persist_directory = str(
+        configured if configured.is_absolute() else root / configured
+    )
+    client = chromadb.PersistentClient(path=persist_directory)
+    try:
+        collection = client.get_collection(f"{repo_name.replace('/', '-')}-{kind}")
+    except Exception:
+        return 0
+    return int(collection.count())
 
 
 def index_issues(repo_name: str, state: str = "all", limit: int = 200) -> int:

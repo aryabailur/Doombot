@@ -39,6 +39,7 @@ import {
 import { RepositorySelector } from '@/components/RepositorySelector'
 import { SkeletonState } from '@/components/SkeletonState'
 import {
+  decideAction,
   getInvestigation,
   getCodeGraph,
   getIssueGraph,
@@ -256,6 +257,7 @@ function EscalationsPage({ repoName, dataVersion }: { repoName: string; dataVers
   const [decided, setDecided] = useState<
     Record<string, EscalationRow['status']>
   >({})
+  const [decisionError, setDecisionError] = useState<string | null>(null)
 
   const escalations = useApiData(() => listEscalations(repoName), {
     pollMs: 20_000,
@@ -276,12 +278,26 @@ function EscalationsPage({ repoName, dataVersion }: { repoName: string; dataVers
     status: EscalationRow['status'],
     note?: string,
   ) => {
+    setDecisionError(null)
     try {
-      await postFeedback({ investigation_id: id, verdict, note })
-    } finally {
-      // Reflect the choice even if the write failed. The maintainer made a
-      // decision; silently discarding it is worse than a stale flag.
+      const investigation = await getInvestigation(id)
+      if (investigation.proposed_action) {
+        await decideAction(investigation.proposed_action.id, {
+          approved: verdict === 'up',
+          decided_by: 'RepoGuardian dashboard maintainer',
+          note,
+        })
+      } else {
+        // Historical investigations created before the approval lifecycle
+        // have no exact payload to execute. Preserve their feedback path, but
+        // never represent it as a GitHub action.
+        await postFeedback({ investigation_id: id, verdict, note })
+      }
       setDecided((current) => ({ ...current, [id]: status }))
+    } catch (error) {
+      setDecisionError(
+        error instanceof Error ? error.message : 'The action decision could not be persisted.',
+      )
     }
   }
 
@@ -293,7 +309,13 @@ function EscalationsPage({ repoName, dataVersion }: { repoName: string; dataVers
   }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+    <div className="flex flex-col gap-3">
+      {decisionError ? (
+        <p className="rounded-lg border border-critical/50 bg-surface-1 px-3 py-2 text-sm text-critical" role="alert">
+          {decisionError}
+        </p>
+      ) : null}
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
       <EscalationTable
         filters={filters}
         onFiltersChange={setFilters}
@@ -308,6 +330,7 @@ function EscalationsPage({ repoName, dataVersion }: { repoName: string; dataVers
         onOpenInvestigation={(id) => navigate(`/investigations/${id}`)}
         onReject={(id) => submit(id, 'down', 'rejected')}
       />
+      </div>
     </div>
   )
 }
@@ -611,7 +634,7 @@ export function App() {
         // just changed the very data every panel is showing.
         setDataVersion((current) => current + 1)
       }
-    }, []),
+    }, [setPipeline]),
   })
 
   return (

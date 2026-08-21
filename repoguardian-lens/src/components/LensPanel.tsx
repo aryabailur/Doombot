@@ -28,6 +28,7 @@ import { DecisionCard } from './DecisionCard'
 import { DuplicateMatch } from './DuplicateMatch'
 import { EvidenceGraph } from './EvidenceGraph'
 import { FollowUpCard } from './FollowUpCard'
+import { FixLabCard } from './FixLabCard'
 import { HealthSnapshot } from './HealthSnapshot'
 import { PRRiskCard } from './PRRiskCard'
 import { RepositoryMemory } from './RepositoryMemory'
@@ -196,6 +197,7 @@ export function LensPanel() {
     activity,
     insight,
     investigation,
+    fixRun,
     duplicates,
     prReview,
     memory,
@@ -207,6 +209,8 @@ export function LensPanel() {
     setDemoMode,
     initialize,
     runInvestigation,
+    startFixRun,
+    decideFixRun,
     loadMemory,
     loadDuplicates,
     ask,
@@ -295,7 +299,15 @@ export function LensPanel() {
                 aria-current={view === tab.id ? 'page' : undefined}
                 onClick={() => {
                   if (tab.id === 'memory') void loadMemory()
-                  else if (tab.id === 'investigation') void runInvestigation()
+                  else if (tab.id === 'investigation') {
+                    // Tab navigation must be read-only. Re-entering a completed
+                    // investigation used to create another backend run on every
+                    // click, which made one issue appear four times in the live
+                    // activity feed. The explicit action inside the view remains
+                    // the only way to start or rerun an investigation.
+                    if (investigation) setView('investigation')
+                    else void runInvestigation()
+                  }
                   else setView(tab.id)
                 }}
               >{tab.label}</button>
@@ -349,8 +361,50 @@ export function LensPanel() {
                   <>
                     {activity && (
                       <section className="rg-section" aria-labelledby="attention-title">
-                        <div className="rg-section-heading"><div><span className="rg-eyebrow">What matters</span><h2 id="attention-title">{activity.attentionCount} things need your attention</h2></div><span className="rg-auto-count">{activity.automatedCount} handled automatically</span></div>
-                        <div className="rg-attention-list">{activity.items.map((item) => <AttentionCard item={item} onOpen={openIssue} key={item.issueNumber} />)}</div>
+                        <div className="rg-section-heading">
+                          <div>
+                            <span className="rg-eyebrow">
+                              {activity.source === 'backend'
+                                ? 'Backend agent decisions'
+                                : activity.source === 'github'
+                                  ? 'Live GitHub heuristic'
+                                  : 'Demo data'}
+                            </span>
+                            <h2 id="attention-title">
+                              {activity.attentionCount}{' '}
+                              {activity.attentionCount === 1 ? 'thing needs' : 'things need'} your attention
+                            </h2>
+                          </div>
+                          <span className="rg-auto-count">
+                            {activity.automatedCount}{' '}
+                            {activity.source === 'backend'
+                              ? 'completed without open escalation'
+                              : activity.source === 'github'
+                                ? 'below the local attention threshold'
+                                : 'demo outcomes'}
+                          </span>
+                        </div>
+                        {activity.items.length > 0 ? (
+                          <div className="rg-attention-list">
+                            {activity.items.map((item) => (
+                              <AttentionCard
+                                item={item}
+                                onOpen={openIssue}
+                                key={item.issueNumber}
+                              />
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="rg-empty-state">
+                            <Bot aria-hidden="true" size={24} />
+                            <strong>No open agent escalations</strong>
+                            <p>
+                              {activity.source === 'backend'
+                                ? 'Run an issue investigation or enable repository monitoring to create live agent results.'
+                                : 'No open GitHub issue currently crosses the local attention threshold.'}
+                            </p>
+                          </div>
+                        )}
                       </section>
                     )}
                     {health && <HealthSnapshot report={health} />}
@@ -370,6 +424,13 @@ export function LensPanel() {
                   <DecisionCard insight={investigation.insight} issueNumber={issueNumber} onInvestigate={() => void runInvestigation()} onFindDuplicates={() => void loadDuplicates()} onFeedback={(feedback) => void recordFeedback(feedback)} />
                   {investigation.insight.decision === 'follow_up' && <FollowUpCard insight={investigation.insight} approval={investigation.approval} onApprove={(action, approved) => void decideApproval(action, approved)} />}
                   {investigation.approval && investigation.insight.decision !== 'follow_up' && <ApprovalTray action={investigation.approval} onDecision={(action, approved) => void decideApproval(action, approved)} />}
+                  <FixLabCard
+                    run={fixRun}
+                    available={!demoMode && backendConfigured}
+                    busy={loading === 'Generating and verifying candidate fix'}
+                    onStart={() => void startFixRun()}
+                    onDecision={(approved) => void decideFixRun(approved)}
+                  />
                   {duplicates.length > 0 && <DuplicateMatch matches={duplicates} />}
                 </>
               ) : (

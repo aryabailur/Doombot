@@ -235,6 +235,7 @@ export const EVIDENCE: Record<string, EvidenceSource> = {
 }
 
 export const DEMO_ACTIVITY: ActivitySummary = {
+  source: 'demo',
   automatedCount: 143,
   attentionCount: 3,
   items: [

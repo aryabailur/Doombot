@@ -53,11 +53,38 @@ export interface InvestigationSummary {
   completed_at: string | null;
 }
 
+export type ActionStatus =
+  | "proposed"
+  | "approved"
+  | "rejected"
+  | "executing"
+  | "verified"
+  | "failed";
+
+export interface ProposedAction {
+  id: string;
+  investigation_id: string;
+  repo_name: string;
+  issue_number: number;
+  action: string;
+  comment: string | null;
+  labels: string[];
+  status: ActionStatus;
+  decided_by: string | null;
+  decision_note: string | null;
+  result: Record<string, unknown> | null;
+  error: string | null;
+  created_at: string;
+  decided_at: string | null;
+  executed_at: string | null;
+}
+
 export interface InvestigationDetail extends InvestigationSummary {
   steps: StepRecord[];
   decision_reason: string | null;
   confidence: number | null;
   impact_score: number | null;
+  proposed_action: ProposedAction | null;
 }
 
 export interface Escalation {
@@ -116,6 +143,46 @@ export interface FeedbackRequest {
   note?: string | null;
 }
 
+export interface ActionDecisionRequest {
+  approved: boolean;
+  decided_by: string;
+  note?: string | null;
+}
+
+export type PolicyGuidance = "observing" | "caution" | "mixed" | "aligned";
+
+export interface ActionPolicyProfile {
+  action: string;
+  samples: number;
+  approvals: number;
+  rejections: number;
+  approval_rate: number;
+  guidance: PolicyGuidance;
+}
+
+export interface LabelPolicyProfile {
+  label: string;
+  samples: number;
+  approvals: number;
+  rejections: number;
+  approval_rate: number;
+  guidance: PolicyGuidance;
+}
+
+export interface RepositoryPolicy {
+  repo_name: string;
+  mode: "observing" | "learned";
+  minimum_samples: number;
+  total_decisions: number;
+  approvals: number;
+  rejections: number;
+  approval_rate: number | null;
+  actions: ActionPolicyProfile[];
+  labels: LabelPolicyProfile[];
+  learned_rules: string[];
+  updated_at: string | null;
+}
+
 export interface BriefResponse {
   markdown: string;
   generated_at: string;
@@ -124,6 +191,48 @@ export interface BriefResponse {
 export interface IndexJobResponse {
   job_id: string;
   status: string;
+}
+
+export interface FixReceipt {
+  command: string[];
+  exit_code: number;
+  duration_ms: number;
+  stdout: string;
+  stderr: string;
+  containerized: boolean;
+  network_disabled: boolean;
+  image: string;
+  image_digest: string;
+}
+
+export interface FixRun {
+  id: string;
+  investigation_id: string;
+  repo_name: string;
+  issue_number: number;
+  status: "queued" | "preparing" | "generating" | "verifying" | "proposed" | "failed" | "approved" | "rejected" | "publishing" | "published";
+  base_sha: string | null;
+  summary: string | null;
+  patch_diff: string | null;
+  commands: string[][];
+  receipts: FixReceipt[];
+  error: string | null;
+  decided_by: string | null;
+  decision_note: string | null;
+  created_at: string;
+  updated_at: string;
+  decided_at: string | null;
+  published_at: string | null;
+}
+
+export interface CreateFixRunRequest {
+  investigation_id: string;
+}
+
+export interface FixDecisionRequest {
+  approved: boolean;
+  decided_by: string;
+  note?: string;
 }
 
 export interface WsEnvelope<T = unknown> {

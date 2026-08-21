@@ -1,11 +1,17 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { toIssueRecord } from './GitHubClient'
+import { GitHubClient, toIssueRecord } from './GitHubClient'
+import { LiveAgentEngine } from './LiveAgentEngine'
 import { decideLiveIssue } from './liveDecisions'
 import { searchLiveIssues } from './retrieval'
 import type { IssueRecord } from '@/lib/types'
 
 const repository = 'octocat/example'
+
+afterEach(() => {
+  GitHubClient.clearCache()
+  vi.unstubAllGlobals()
+})
 
 function issue(partial: Partial<IssueRecord> & { number: number; title: string }): IssueRecord {
   return {
@@ -49,6 +55,104 @@ describe('toIssueRecord', () => {
     })
     expect(record.body).toBe('')
     expect(record.environment).toBeUndefined()
+  })
+})
+
+describe('live activity source', () => {
+  it('requests only open issues for the attention queue', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      expect(String(input)).toContain('/issues?')
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const activity = await new LiveAgentEngine().getActivity({
+      owner: 'octocat',
+      repo: 'example',
+    })
+
+    expect(activity.source).toBe('github')
+    expect(String(fetchMock.mock.calls[0][0])).toContain('issues?state=open')
+  })
+})
+
+describe('live repository questions', () => {
+  const rawIssues = [
+    {
+      number: 4,
+      title: 'Cannot authenticate after v2.1 update - API_KEY exposed in traceback',
+      body: 'Updating to v2.1 returns 401 with the correct password and prints the raw API_KEY value to logs.',
+      labels: [{ name: 'bug' }, { name: 'security' }],
+      state: 'open',
+      created_at: '2026-08-01T00:00:00Z',
+      updated_at: '2026-08-04T00:00:00Z',
+      comments: 2,
+    },
+    {
+      number: 6,
+      title: 'Login broken with 401 after v2.1 upgrade',
+      body: 'After upgrading to v2.1 login returns 401.',
+      labels: [{ name: 'bug' }],
+      state: 'open',
+      created_at: '2026-08-02T00:00:00Z',
+      updated_at: '2026-08-03T00:00:00Z',
+      comments: 0,
+    },
+    {
+      number: 3,
+      title: 'Login fails with 401 after upgrading to v2.1',
+      body: 'Upgraded to v2.1, now login fails with a 401 error.',
+      labels: [{ name: 'bug' }],
+      state: 'open',
+      created_at: '2026-08-01T00:00:00Z',
+      updated_at: '2026-08-02T00:00:00Z',
+      comments: 0,
+    },
+  ]
+
+  function stubIssueCorpus() {
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      new Response(JSON.stringify(rawIssues), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })))
+  }
+
+  it('grounds security and similar-bug questions in the issue visible on GitHub', async () => {
+    stubIssueCorpus()
+    const engine = new LiveAgentEngine()
+    const input = {
+      owner: 'aryabailur',
+      repo: 'Doombot',
+      context: { type: 'issue' as const, owner: 'aryabailur', repo: 'Doombot', issueNumber: 4 },
+    }
+
+    const security = await engine.answerQuestion({
+      ...input,
+      question: 'What evidence supports treating this as a security concern?',
+    })
+    const similar = await engine.answerQuestion({ ...input, question: 'Find similar bugs' })
+
+    expect(security.answer.toLowerCase()).toContain('security')
+    expect(security.evidence.map((item) => item.id)).toContain('#4')
+    expect(similar.evidence.map((item) => item.id)).toEqual(expect.arrayContaining(['#6', '#3']))
+  })
+
+  it('answers every repository-wide suggested prompt from GitHub-derived data', async () => {
+    stubIssueCorpus()
+    const engine = new LiveAgentEngine()
+    const base = { owner: 'aryabailur', repo: 'Doombot' }
+
+    const authentication = await engine.answerQuestion({ ...base, question: 'Show authentication issues' })
+    const recent = await engine.answerQuestion({ ...base, question: 'What changed recently?' })
+
+    expect(authentication.evidence.length).toBeGreaterThan(0)
+    expect(authentication.answer).toContain('authentication-related')
+    expect(recent.evidence.map((item) => item.id)).toEqual(['#4', '#6', '#3'])
+    expect(recent.answer).toContain('most recently updated')
   })
 })
 

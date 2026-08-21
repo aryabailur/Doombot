@@ -69,7 +69,9 @@ export function useApiData<T>(
   // Held in a ref so a caller passing an inline arrow does not restart the
   // poll on every render.
   const fetcherRef = useRef(fetcher)
-  fetcherRef.current = fetcher
+  useEffect(() => {
+    fetcherRef.current = fetcher
+  }, [fetcher])
 
   const hasData = data !== null
 
@@ -86,12 +88,14 @@ export function useApiData<T>(
   }, [])
 
   useEffect(() => {
-    void load()
-    if (!pollMs) {
-      return
+    // Schedule outside the effect body so the state updates performed by
+    // load() cannot cascade synchronously during effect setup.
+    const initial = setTimeout(() => void load(), 0)
+    const poll = pollMs ? setInterval(() => void load(), pollMs) : undefined
+    return () => {
+      clearTimeout(initial)
+      if (poll) clearInterval(poll)
     }
-    const timer = setInterval(() => void load(), pollMs)
-    return () => clearInterval(timer)
   }, [load, pollMs, refreshKey])
 
   return {

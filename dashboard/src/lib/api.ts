@@ -6,10 +6,16 @@ import type {
   Escalation,
   CreateInvestigationRequest,
   FeedbackRequest,
+  ActionDecisionRequest,
+  ProposedAction,
+  RepositoryPolicy,
   BriefResponse,
   CodeGraphResponse,
   IndexJobResponse,
   IssueGraphResponse,
+  FixRun,
+  CreateFixRunRequest,
+  FixDecisionRequest,
 } from "./types";
 import {
   mockRepos,
@@ -157,6 +163,52 @@ export function listEscalations(repoName?: string): Promise<Escalation[]> {
 export function postFeedback(req: FeedbackRequest): Promise<{ ok: boolean }> {
   if (USE_MOCKS) return delay().then(() => ({ ok: true }));
   return request("/api/feedback", { method: "POST", body: JSON.stringify(req) });
+}
+
+export function listActions(repoName?: string): Promise<ProposedAction[]> {
+  if (USE_MOCKS) return delay().then(() => []);
+  const query = repoName ? `?repo_name=${encodeURIComponent(repoName)}` : "";
+  return request(`/api/actions${query}`);
+}
+
+export function decideAction(
+  actionId: string,
+  decision: ActionDecisionRequest,
+): Promise<ProposedAction> {
+  if (USE_MOCKS) {
+    throw new Error("Live action execution is unavailable while dashboard fixtures are enabled.");
+  }
+  return request(`/api/actions/${encodeURIComponent(actionId)}/decision`, {
+    method: "POST",
+    body: JSON.stringify(decision),
+  });
+}
+
+export function getRepositoryPolicy(repoName: string): Promise<RepositoryPolicy> {
+  return request(`/api/policy?repo_name=${encodeURIComponent(repoName)}`);
+}
+
+export function startFixRun(input: CreateFixRunRequest): Promise<FixRun> {
+  if (USE_MOCKS) {
+    throw new Error("Fix Lab requires the live RepoGuardian backend.");
+  }
+  return request("/api/fix-runs", { method: "POST", body: JSON.stringify(input) });
+}
+
+export function getFixRun(runId: string): Promise<FixRun> {
+  return request(`/api/fix-runs/${encodeURIComponent(runId)}`);
+}
+
+export function listFixRuns(repoName?: string): Promise<FixRun[]> {
+  const query = repoName ? `?repo_name=${encodeURIComponent(repoName)}` : "";
+  return request(`/api/fix-runs${query}`);
+}
+
+export function decideFixRun(runId: string, decision: FixDecisionRequest): Promise<FixRun> {
+  return request(`/api/fix-runs/${encodeURIComponent(runId)}/decision`, {
+    method: "POST",
+    body: JSON.stringify(decision),
+  });
 }
 
 export function getBrief(owner: string, repo: string): Promise<BriefResponse> {

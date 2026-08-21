@@ -12,6 +12,7 @@ chroma_*/
 *.db
 *.db-wal
 *.db-shm
+.fixlab/
 
 # Frontend
 node_modules/

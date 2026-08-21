@@ -1,0 +1,14 @@
+FROM python:3.12-slim
+
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# This image is built by an operator, never during an investigation. Network
+# access is disabled when candidate tests run, so generated code cannot fetch
+# packages or contact external services.
+COPY fixlab/requirements-verifier.txt /tmp/repoguardian-requirements.txt
+RUN python -m pip install --no-cache-dir -r /tmp/repoguardian-requirements.txt
+
+WORKDIR /workspace
+USER 65534:65534

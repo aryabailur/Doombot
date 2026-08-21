@@ -46,14 +46,22 @@ demo-day crash.
 |---|---|---|---|---|---|
 | GET | `/api/health` | — | `{status: "ok"}` | A | Liveness only, no DB touch |
 | GET | `/api/repos` | — | `[RepoSummary]` | A | `{repo_name, health_score, open_investigations, last_scan}` |
-| POST | `/api/repos/{owner}/{repo}/index` | — | `IndexJobResponse` | A | `{job_id, status}`; triggers RAG indexing (async/background) |
+| POST | `/api/repos/{owner}/{repo}/index` | — | `IndexJobResponse` | A | Ensures bounded code + issue indexing; returns `ready` or an async job |
+| GET | `/api/index-jobs/{id}` | — | `IndexJobResponse` | A | In-process status: `queued`, `running`, `done`, `ready`, or `error` |
 | GET | `/api/repos/{owner}/{repo}/health` | — | `HealthResponse` | A | `{score, breakdown, history, measured, issue_count}`; `measured: false` means no issues to score — render `--`, not the number |
 | POST | `/api/investigations` | `CreateInvestigationRequest` | `{investigation_id: str}` | A | `{repo_name, kind: "issue"|"pr", number}`; runs graph in background |
 | GET | `/api/investigations` | — | `[InvestigationSummary]` | A | List, newest first; `?repo_name=` scopes to one repo |
-| GET | `/api/investigations/{id}` | — | `InvestigationDetail` | A | Detail + `steps[]` replayed from SQLite |
+| GET | `/api/investigations/{id}` | — | `InvestigationDetail` | A | Detail + `steps[]` and nullable `proposed_action`, replayed from SQLite |
 | GET | `/api/escalations` | — | `[Escalation]` | A | `{investigation_id, reason, severity, number, title, created_at}`; `?repo_name=` scopes to one repo |
+| GET | `/api/actions` | — | `[ProposedAction]` | A | Auditable action queue; optional `?repo_name=` and `?status=` filters |
+| GET | `/api/actions/{id}` | — | `ProposedAction` | A | Exact comment/labels, decision, execution receipt, and timestamps |
+| POST | `/api/actions/{id}/decision` | `ActionDecisionRequest` | `ProposedAction` | A | Atomically approve/reject; approval executes once unless `DEMO_MODE=1` |
+| POST | `/api/fix-runs` | `CreateFixRunRequest` | `FixRun` | A | Explicitly generate and container-verify a patch grounded in a completed code-aware investigation |
+| GET | `/api/fix-runs/{id}` | — | `FixRun` | A | Persisted lifecycle, diff, commands, and verification receipts |
+| POST | `/api/fix-runs/{id}/decision` | `FixDecisionRequest` | `FixRun` | A | Single-use review; approval does not publish a branch or PR |
+| GET | `/api/policy` | — | `RepositoryPolicy` | A | `?repo_name=`; decision-derived action/label preferences, sample counts, and guidance |
 | POST | `/api/repos/{owner}/{repo}/scan` | — | `{repo_name, queued[], skipped_already_investigated}` | A | Investigates open issues, `?limit=` 1–25 (default 5); 502 if the repo cannot be read |
-| POST | `/api/feedback` | `FeedbackRequest` | `{ok: true}` | A | `{investigation_id, step_id?, verdict: "up"|"down", note?}`; logged only, does not alter agent behavior |
+| POST | `/api/feedback` | `FeedbackRequest` | `{ok: true}` | A | Free-form usefulness feedback is logged; action approvals/rejections also feed `RepositoryPolicy` |
 | GET | `/api/brief/{owner}/{repo}` | — | `BriefResponse` | A | `{markdown, generated_at}` |
 | WS | `/ws` | — | event envelope stream | A | See §5 |
 
@@ -138,6 +146,24 @@ class InvestigationDetail(InvestigationSummary):
     decision_reason: str | None
     confidence: float | None
     impact_score: float | None
+    proposed_action: ProposedAction | None = None
+
+class ProposedAction(BaseModel):
+    id: str
+    investigation_id: str
+    repo_name: str
+    issue_number: int
+    action: str
+    comment: str | None
+    labels: list[str]
+    status: Literal["proposed", "approved", "rejected", "executing", "verified", "failed"]
+    decided_by: str | None
+    decision_note: str | None
+    result: dict | None
+    error: str | None
+    created_at: str
+    decided_at: str | None
+    executed_at: str | None
 
 class Escalation(BaseModel):
     investigation_id: str
@@ -181,6 +207,40 @@ class FeedbackRequest(BaseModel):
     step_id: str | None = None
     verdict: Literal["up", "down"]
     note: str | None = None
+
+class ActionDecisionRequest(BaseModel):
+    approved: bool
+    decided_by: str
+    note: str | None = None
+
+class ActionPolicyProfile(BaseModel):
+    action: str
+    samples: int
+    approvals: int
+    rejections: int
+    approval_rate: float
+    guidance: Literal["observing", "caution", "mixed", "aligned"]
+
+class LabelPolicyProfile(BaseModel):
+    label: str
+    samples: int
+    approvals: int
+    rejections: int
+    approval_rate: float
+    guidance: Literal["observing", "caution", "mixed", "aligned"]
+
+class RepositoryPolicy(BaseModel):
+    repo_name: str
+    mode: Literal["observing", "learned"]
+    minimum_samples: int
+    total_decisions: int
+    approvals: int
+    rejections: int
+    approval_rate: float | None
+    actions: list[ActionPolicyProfile]
+    labels: list[LabelPolicyProfile]
+    learned_rules: list[str]
+    updated_at: str | None
 
 class BriefResponse(BaseModel):
     markdown: str
